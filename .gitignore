@@ -1,0 +1,73 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Entornos virtuales ===
+.venv/
+venv/
+env/
+ENV/
+
+# === Variables de entorno y secretos ===
+.env
+.env.*
+!.env.example
+secrets/*
+!secrets/.gitkeep
+*.pem
+*.key
+
+# === Credenciales OAuth y service accounts ===
+gmail_credentials.json
+gmail_token.json
+gsheets_service_account.json
+
+# === Datos persistentes ===
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# === Logs ===
+*.log
+logs/
+
+# === Caches y herramientas ===
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === uv / poetry ===
+uv.lock
+poetry.lock
