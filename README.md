@@ -50,8 +50,8 @@ telycoposio-tickets/
 
 ## Arranque rapido (desarrollo)
 
-> En este Paso 1 todavia **no hay codigo** ejecutable: solo estructura, dependencias
-> y configuracion. Las instrucciones siguientes son la forma final esperada.
+Estrategia: **venv local con `uvicorn --reload`** para desarrollo del dia a dia.
+Docker se usa solo para el despliegue final en el servidor de oficina.
 
 1. Clonar el repo y entrar en la carpeta.
 2. Crear y activar un entorno virtual:
@@ -59,21 +59,41 @@ telycoposio-tickets/
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    ```
-3. Instalar dependencias (cuando haya un lockfile o paquetes instalables):
+3. Instalar dependencias:
    ```powershell
    pip install -e ".[dev]"
    ```
-4. Copiar `.env.example` a `.env` y rellenar valores.
+4. Copiar `.env.example` a `.env` y rellenar valores (cuando haya servicios reales conectados).
 5. Colocar las credenciales de Google en `secrets/` (no se versionan).
 6. Inicializar la BD local: `python scripts/init_db.py` (pendiente de implementar).
-7. Arrancar el servidor: `uvicorn app.main:app --reload` (pendiente de implementar).
+7. Arrancar el servidor:
+   ```powershell
+   uvicorn app.main:app --reload
+   ```
+8. Verificar que vive: `curl http://localhost:8000/health` -> `{"status":"ok"}`.
+
+---
+
+## Despliegue (produccion, servidor de oficina)
+
+Solo accesible por red interna + VPN, sin reverse proxy en esta fase.
+
+```bash
+docker compose build
+docker compose up -d
+docker compose ps          # comprobar que el healthcheck pasa a "healthy"
+```
+
+El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
+(credenciales OAuth/service accounts) como volumenes.
 
 ---
 
 ## Estado actual
 
 - [x] Paso 1 — Estructura del proyecto, dependencias y configuracion base.
-- [ ] Paso 2 — (pendiente).
+- [x] Paso 2 — Dockerfile, docker-compose.yml y endpoint `/health`.
+- [ ] Paso 3 — (pendiente).
 
 ---
 

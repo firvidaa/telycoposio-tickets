@@ -68,6 +68,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# === Claude Code (configuracion local del agente) ===
+.claude/
+
 # === uv / poetry ===
 uv.lock
 poetry.lock

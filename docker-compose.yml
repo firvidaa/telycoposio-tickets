@@ -1,0 +1,32 @@
+# Orquestacion para el despliegue en el servidor de oficina (uso solo en
+# produccion). En desarrollo se usa venv local con `uvicorn --reload`.
+#
+# Requiere Docker Compose v2.24+ (env_file con `required: false`).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telycoposio-tickets:latest
+    container_name: telycoposio-tickets
+    restart: unless-stopped
+    ports:
+      # Solo accesible en la red local + VPN (sin reverse proxy de momento).
+      - "8000:8000"
+    env_file:
+      # Marcado opcional para que `docker compose build` y verificaciones
+      # iniciales funcionen aunque aun no exista .env en la maquina.
+      - path: .env
+        required: false
+    volumes:
+      # SQLite y datos persistentes.
+      - ./data:/app/data
+      # Credenciales OAuth y service accounts (solo lectura desde el contenedor).
+      - ./secrets:/app/secrets:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

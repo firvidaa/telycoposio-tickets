@@ -1,0 +1,43 @@
+# Control de version
+.git
+.gitignore
+.gitattributes
+
+# Entornos virtuales locales
+.venv
+venv
+env
+ENV
+
+# Variables y secretos: NUNCA dentro de la imagen
+.env
+.env.*
+!.env.example
+secrets/
+
+# Datos persistentes (se montan via volumen)
+data/
+
+# Caches Python y herramientas
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Editor / IDE / agente
+.vscode
+.idea
+.claude
+*.swp
+.DS_Store
+Thumbs.db
+
+# Documentacion / artefactos no necesarios en runtime
+CHECKLIST_PREVIO.md
+PROMPT_BASE.md
+SPEC.md
+tests/
