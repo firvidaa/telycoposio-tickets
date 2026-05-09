@@ -1,8 +1,15 @@
 # Sistema de Tickets Telycoposio — Especificación del Proyecto
 
-> **Versión:** 1.1
-> **Fecha:** 2026-05-05
+> **Versión:** 1.2
+> **Fecha:** 2026-05-08
 > **Estado:** Diseño inicial
+
+### Cambios respecto a v1.1
+
+- **§4** — Se invierte la jerarquía de fuentes de verdad: **SQLite** pasa a ser la fuente de verdad operativa (lecturas, login, búsquedas). **Google Sheets** queda como vista humana sincronizada en background; si Sheets falla, la app sigue operativa y el ticket queda pendiente de sincronizar.
+- **§4.1** — Se añade campo `synced_to_sheets_at` (DATETIME NULL) a `tickets` para soportar el modelo de sincronización unidireccional SQLite → Sheets.
+- **§4.2** — Se añade columna `role` (TEXT, por defecto `'user'`) a `users` desde el MVP, aunque no se use todavía, para evitar una migración futura en producción.
+- **§4.3** — Se elimina la tabla `sessions`. La sesión web se gestiona con cookies firmadas usando `itsdangerous` (ya en dependencias). La invalidación masiva de sesiones (despido, brecha) se hace rotando `APP_SECRET_KEY`.
 
 ### Cambios respecto a v1.0
 
@@ -95,12 +102,18 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 
 ## 4. Modelo de datos
 
-### 4.1. Tabla `tickets` (Google Sheets + SQLite)
+> **Fuentes de verdad (v1.2):** SQLite local es la **fuente de verdad operativa**: todas las lecturas y escrituras de la aplicación pasan por SQLite. Google Sheets es una **vista humana de solo lectura** que se sincroniza desde SQLite en background tras cada cambio. Si Sheets no está disponible, la app sigue operando y el ticket queda con `synced_to_sheets_at = NULL` hasta que el sincronizador lo procese.
+>
+> **Sesiones (v1.2):** ya no se almacenan en BD. Ver §9 — se usan cookies firmadas con `itsdangerous`.
+>
+> **Tipos en SQLite:** los `BOOLEAN` se almacenan como `INTEGER 0/1`. Los `DATETIME` se almacenan como `TEXT` en formato ISO-8601 UTC (`"2026-05-08T12:34:56+00:00"`); la conversión a hora local solo se hace al renderizar en pantalla.
+
+### 4.1. Tabla `tickets`
 
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `id` | TEXT PK | Identificador único, formato `TLY-2026-0001` |
-| `created_at` | DATETIME | Fecha/hora de creación |
+| `created_at` | DATETIME | Fecha/hora de creación (UTC) |
 | `channel` | TEXT | `email` / `whatsapp` / `voicemail` |
 | `from_name` | TEXT | Nombre del remitente (si se conoce) |
 | `from_email` | TEXT | Email del remitente (si aplica) |
@@ -113,12 +126,13 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 | `category_reasoning` | TEXT | Razonamiento breve de la IA. `NULL` si la IA falla. |
 | `category_manual_override` | BOOLEAN | `True` si un humano cambió la categoría. |
 | `needs_review` | BOOLEAN | `True` si la IA falló (`category IS NULL`) o si `category_confidence < 0.7`. Permite filtrar tickets que requieren revisión humana. |
-| `raw_message_id` | TEXT | ID original del mensaje (Gmail message-id, etc.) para evitar duplicados |
+| `raw_message_id` | TEXT | ID original del mensaje (Gmail message-id, etc.) para evitar duplicados. UNIQUE cuando no es NULL. |
 | `attachments` | TEXT (JSON) | Lista de adjuntos: `[{"name":"factura.pdf","url":"..."}]` |
 | `client_notified_at` | DATETIME | Cuándo se envió el email de confirmación |
 | `last_updated_at` | DATETIME | Última modificación |
+| `synced_to_sheets_at` | DATETIME NULL | Cuándo se sincronizó a Google Sheets. `NULL` mientras esté pendiente. (v1.2) |
 
-### 4.2. Tabla `users` (solo SQLite local)
+### 4.2. Tabla `users`
 
 | Campo | Tipo | Descripción |
 |---|---|---|
@@ -127,11 +141,10 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 | `password_hash` | TEXT | bcrypt |
 | `display_name` | TEXT | Nombre visible |
 | `email` | TEXT | Para notificaciones internas |
+| `role` | TEXT | `'user'` por defecto. Reservado para diferenciar admin/usuario en el futuro. (v1.2) |
 | `created_at` | DATETIME | |
 
-### 4.3. Tabla `sessions` (solo SQLite local)
-
-Sesiones activas para login web.
+> **Nota (v1.2):** la tabla `sessions` se eliminó. Ver §9 para el modelo de sesiones por cookie firmada.
 
 ---
 
@@ -286,6 +299,7 @@ TICKET_YEAR_AUTO=true
 - Backup diario automatizado de SQLite y export de Google Sheets.
 - Logs sin contenido sensible (no logear cuerpo completo de emails ni passwords).
 - Rate limiting básico en el login (max 5 intentos por minuto).
+- **Sesiones web (v1.2):** cookies firmadas con `itsdangerous` y firmadas con `APP_SECRET_KEY`. La cookie es `HttpOnly`, `SameSite=Lax` y `Secure` cuando se sirve por HTTPS. La invalidación masiva de sesiones (despido, brecha, sospecha de fuga) se realiza rotando `APP_SECRET_KEY` y reiniciando la aplicación.
 
 ---
 

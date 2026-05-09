@@ -1,0 +1,42 @@
+"""Capa de acceso a SQLite local.
+
+Proporciona:
+- ``get_connection``: context manager que abre una conexion SQLite con
+  ``row_factory = sqlite3.Row`` y ``foreign_keys = ON``, y la cierra al salir.
+- ``init_schema``: ejecuta el archivo ``schema.sql`` de esta misma carpeta.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+
+_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+
+@contextmanager
+def get_connection(db_path: str | Path) -> Iterator[sqlite3.Connection]:
+    """Abre una conexion a la BD en ``db_path`` y la cierra al salir del bloque.
+
+    Para BD en disco se acepta ``Path`` o ``str``. Para BD en memoria se acepta
+    el literal ``":memory:"``.
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_schema(conn: sqlite3.Connection) -> None:
+    """Aplica ``schema.sql`` sobre la conexion dada.
+
+    El esquema usa ``CREATE TABLE IF NOT EXISTS`` y ``CREATE INDEX IF NOT EXISTS``,
+    asi que es seguro ejecutarlo varias veces.
+    """
+    sql = _SCHEMA_PATH.read_text(encoding="utf-8")
+    conn.executescript(sql)

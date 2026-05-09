@@ -65,12 +65,20 @@ Docker se usa solo para el despliegue final en el servidor de oficina.
    ```
 4. Copiar `.env.example` a `.env` y rellenar valores (cuando haya servicios reales conectados).
 5. Colocar las credenciales de Google en `secrets/` (no se versionan).
-6. Inicializar la BD local: `python scripts/init_db.py` (pendiente de implementar).
-7. Arrancar el servidor:
+6. Inicializar la BD local:
+   ```powershell
+   python scripts/init_db.py
+   ```
+   Crea `data/app.db` con las tablas `tickets` y `users` (idempotente).
+7. Anadir al menos un usuario para poder hacer login (cuando exista la web):
+   ```powershell
+   python scripts/add_user.py --username alfredo --display-name "Alfredo" --role admin
+   ```
+8. Arrancar el servidor:
    ```powershell
    uvicorn app.main:app --reload
    ```
-8. Verificar que vive: `curl http://localhost:8000/health` -> `{"status":"ok"}`.
+9. Verificar que vive: `curl http://localhost:8000/health` -> `{"status":"ok"}`.
 
 ---
 
@@ -93,7 +101,8 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 
 - [x] Paso 1 — Estructura del proyecto, dependencias y configuracion base.
 - [x] Paso 2 — Dockerfile, docker-compose.yml y endpoint `/health`.
-- [ ] Paso 3 — (pendiente).
+- [x] Paso 3 — Modelo de datos, SQLite y scripts de inicializacion (SPEC v1.2).
+- [ ] Paso 4 — (pendiente).
 
 ---
 
