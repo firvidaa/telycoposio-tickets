@@ -38,6 +38,14 @@ dependencies = [
     # Utilidades
     "beautifulsoup4>=4.12.3",
     "httpx>=0.27.2",
+
+    # Zonas horarias IANA en Windows.
+    # En Linux/macOS, `zoneinfo` lee de /usr/share/zoneinfo, asi que no hace
+    # falta nada. En Windows no existe esa base de datos, asi que hay que
+    # instalarla via PyPI o `zoneinfo.ZoneInfo("Europe/Madrid")` revienta con
+    # ZoneInfoNotFoundError. La usamos en app/services/ticket_service.py para
+    # calcular el anyo del contador en hora local de Madrid.
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

@@ -102,7 +102,8 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 - [x] Paso 1 — Estructura del proyecto, dependencias y configuracion base.
 - [x] Paso 2 — Dockerfile, docker-compose.yml y endpoint `/health`.
 - [x] Paso 3 — Modelo de datos, SQLite y scripts de inicializacion (SPEC v1.2).
-- [ ] Paso 4 — (pendiente).
+- [x] Paso 4 — Configuracion centralizada (`app.config`) y servicio de tickets (`app.services.ticket_service`).
+- [ ] Paso 5 — (pendiente).
 
 ---
 
