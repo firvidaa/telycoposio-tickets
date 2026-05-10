@@ -95,10 +95,26 @@ def _category_label(value: object) -> str:
     return _CATEGORY_LABELS.get(str(value), str(value))
 
 
+def _human_size(value: object) -> str:
+    """Formatea ``size_bytes`` como '12 B' / '3.4 KB' / '1.2 MB'. ``None`` → ''."""
+    if value is None:
+        return ""
+    try:
+        b = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if b < 1024:
+        return f"{b} B"
+    if b < 1024 * 1024:
+        return f"{b / 1024:.1f} KB"
+    return f"{b / (1024 * 1024):.1f} MB"
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.filters["madrid"] = _format_madrid
 templates.env.filters["status_label"] = _status_label
 templates.env.filters["category_label"] = _category_label
+templates.env.filters["human_size"] = _human_size
 
 router = APIRouter()
 

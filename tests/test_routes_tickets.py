@@ -132,6 +132,8 @@ def client(db_path: Path) -> Iterator[TestClient]:
         _env_file=None,
         APP_SECRET_KEY=SECRET,
         ANTHROPIC_API_KEY="sk-ant-test",
+        EMAIL_ADDRESS="test@example.com",
+        EMAIL_APP_PASSWORD="abcdefghijklmnop",
         SQLITE_PATH=str(db_path),
         APP_ENV="development",
     )
@@ -154,6 +156,8 @@ def anon_client(db_path: Path) -> Iterator[TestClient]:
         _env_file=None,
         APP_SECRET_KEY=SECRET,
         ANTHROPIC_API_KEY="sk-ant-test",
+        EMAIL_ADDRESS="test@example.com",
+        EMAIL_APP_PASSWORD="abcdefghijklmnop",
         SQLITE_PATH=str(db_path),
         APP_ENV="development",
     )
@@ -371,6 +375,27 @@ def test_detalle_existente(client: TestClient, db_path: Path) -> None:
     assert "Cuerpo del ticket 1" in r.text
     assert "captura.png" in r.text
     assert "https://x.test/a.png" in r.text
+
+
+def test_detalle_adjunto_sin_url_muestra_solo_nombre_y_tamano(
+    client: TestClient, db_path: Path
+) -> None:
+    """Caso MVP v1.3: adjunto sin url; render = nombre + tamanyo, sin <a href>."""
+    _insert_ticket(
+        db_path,
+        _ticket(
+            1,
+            attachments=[Attachment(name="captura.png", size_bytes=58_400)],
+        ),
+    )
+    r = client.get("/tickets/TLY-2026-0001")
+    assert r.status_code == 200
+    assert "captura.png" in r.text
+    # Tamanyo formateado por filter human_size: 58400 bytes ≈ 57.0 KB.
+    assert "57.0 KB" in r.text
+    # No debe haber link al adjunto cuando url es None.
+    assert "href=\"None\"" not in r.text
+    assert "captura.png</a>" not in r.text  # no esta envuelto en <a>...</a>
 
 
 def test_detalle_inexistente_404(client: TestClient) -> None:

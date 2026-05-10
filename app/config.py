@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # =====================================================================
     APP_SECRET_KEY: str = Field(min_length=32)
     ANTHROPIC_API_KEY: str = Field(min_length=1)
+    EMAIL_ADDRESS: str = Field(min_length=1)
+    EMAIL_APP_PASSWORD: str = Field(min_length=1)
 
     # =====================================================================
     # Aplicacion (con default razonable)
@@ -56,12 +58,15 @@ class Settings(BaseSettings):
     ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
 
     # =====================================================================
-    # Gmail (todo opcional hasta que se integre la fuente Gmail)
+    # Email — IMAP + SMTP con App Password (v1.3)
     # =====================================================================
-    GMAIL_ADDRESS: str | None = None
-    GMAIL_CREDENTIALS_PATH: str | None = None
-    GMAIL_TOKEN_PATH: str | None = None
-    GMAIL_POLL_INTERVAL_SECONDS: int = 60
+    # Hosts/puertos por defecto a Gmail. Si algun dia migramos de proveedor,
+    # se sobreescriben en ``.env``.
+    EMAIL_IMAP_HOST: str = "imap.gmail.com"
+    EMAIL_IMAP_PORT: int = 993
+    EMAIL_SMTP_HOST: str = "smtp.gmail.com"
+    EMAIL_SMTP_PORT: int = 587
+    EMAIL_POLL_INTERVAL_SECONDS: int = 60
     INTERNAL_NOTIFICATION_EMAIL: str | None = None
 
     # =====================================================================

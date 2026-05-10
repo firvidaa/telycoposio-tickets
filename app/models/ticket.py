@@ -47,10 +47,17 @@ class TicketChannel(str, Enum):
 
 
 class Attachment(BaseModel):
-    """Adjunto referenciado desde un ticket."""
+    """Adjunto referenciado desde un ticket.
+
+    En MVP (v1.3) ``url`` es ``None`` porque el cliente IMAP solo extrae
+    metadatos (no descarga el contenido). ``size_bytes`` es el tamano del
+    payload decodificado del MIME part. Cuando en el futuro guardemos el
+    contenido en almacenamiento accesible, ``url`` apuntara ahi.
+    """
 
     name: str
-    url: str
+    size_bytes: int | None = None
+    url: str | None = None
 
 
 # ---------------------------------------------------------------------------

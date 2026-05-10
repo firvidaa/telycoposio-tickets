@@ -60,6 +60,8 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         _env_file=None,
         APP_SECRET_KEY=SECRET,
         ANTHROPIC_API_KEY="sk-ant-test",
+        EMAIL_ADDRESS="test@example.com",
+        EMAIL_APP_PASSWORD="abcdefghijklmnop",
         SQLITE_PATH=str(db_path),
         APP_ENV="development",  # cookie sin Secure para TestClient
     )

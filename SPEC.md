@@ -1,8 +1,15 @@
 # Sistema de Tickets Telycoposio — Especificación del Proyecto
 
-> **Versión:** 1.2
-> **Fecha:** 2026-05-08
+> **Versión:** 1.3
+> **Fecha:** 2026-05-10
 > **Estado:** Diseño inicial
+
+### Cambios respecto a v1.2
+
+- **§3 / §5 / §6 / §7** — Sustituimos **Gmail API + OAuth 2.0** por **IMAP + SMTP con App Password** para email entrante y saliente. Razón: el scope `gmail.modify` (necesario para leer mensajes y aplicar etiquetas) es **restricted** según la clasificación oficial de Google; las apps con scopes restricted no verificadas tienen el `refresh_token` limitado en duración tanto en modo Testing como en modo "In production" sin verificación. Las opciones para evitar esto eran (a) verificación + CASA assessment (2-6 semanas, varios miles de € en auditoría externa), o (b) Google Workspace (~6 €/usuario/mes para registrar el proyecto Cloud como Internal). Para un equipo de 3 personas con bajo volumen y presupuesto mínimo, ambas son desproporcionadas. App passwords no caducan, no requieren trámites con Google y cubren el caso de uso. Riesgo conocido: si Google retira app passwords (lo lleva amenazando años pero sigue funcionando en mayo de 2026), tocará migrar a Workspace.
+- **§4.1** — La descripción de `raw_message_id` se generaliza: ahora referencia el header `Message-Id` RFC 5322 del email, no el id interno de Gmail. La forma del valor cambia ligeramente (entre `<...>`) pero la unicidad y la función de deduplicación se mantienen.
+- **§4.1** — `Attachment` pasa a tener `url` y `size_bytes` opcionales. En MVP solo guardamos metadatos (nombre + tamaño) extraídos del email; `url` queda reservado para cuando descarguemos el contenido a almacenamiento accesible. Cambio retrocompatible: los datos demo previos siguen siendo válidos.
+- **§5.1** — La marca de "ya procesado" pasa de la etiqueta Gmail `procesado` a un **IMAP keyword** custom `TLY_PROCESSED`. Funciona vía IMAP estándar sin depender de extensiones específicas de Gmail (`X-GM-LABELS`).
 
 ### Cambios respecto a v1.1
 
@@ -82,7 +89,7 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 | Plantillas HTML | Jinja2 + Tailwind CSS (vía CDN) | Frontend simple sin build complicado |
 | Base de datos primaria | Google Sheets (vía API) | Visibilidad humana directa, requisito del cliente |
 | Caché / DB local | SQLite | Resiliente si Google Sheets falla, búsquedas rápidas |
-| Email entrante/saliente | Gmail API (OAuth 2.0) | Oficial, robusto, mejor que IMAP/SMTP |
+| Email entrante/saliente | IMAP + SMTP (con App Password) sobre cuenta Gmail | Sin caducidad de credenciales y sin trámites con Google. Ver "Cambios respecto a v1.2" para la justificación. |
 | Categorización IA | Anthropic API — Claude Haiku 4.5 | Modelo barato y rápido, ideal para clasificación |
 | Autenticación interna | Sesiones con cookies + bcrypt para passwords | Sencillo y seguro para 3 usuarios |
 | Despliegue | Docker + Docker Compose en servidor de oficina | Portable y reproducible |
@@ -93,7 +100,7 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 
 | Servicio | Coste estimado mensual | Proveedor |
 |---|---|---|
-| Cuenta Gmail dedicada | 0 € | Google |
+| Cuenta Gmail dedicada (con 2FA + App Password) | 0 € | Google |
 | API de Anthropic (Claude) | < 1 € (estimado para 200 tickets/mes con Haiku) | Anthropic |
 | WhatsApp Cloud API (Fase 2) | 0 € (servicio: <1.000 conv./mes gratis e ilimitadas desde nov-2024) | Meta |
 | API Aire Networks (Fase 3) | Incluido en el servicio actual de centralita | Grupo Aire |
@@ -126,8 +133,8 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 | `category_reasoning` | TEXT | Razonamiento breve de la IA. `NULL` si la IA falla. |
 | `category_manual_override` | BOOLEAN | `True` si un humano cambió la categoría. |
 | `needs_review` | BOOLEAN | `True` si la IA falló (`category IS NULL`) o si `category_confidence < 0.7`. Permite filtrar tickets que requieren revisión humana. |
-| `raw_message_id` | TEXT | ID original del mensaje (Gmail message-id, etc.) para evitar duplicados. UNIQUE cuando no es NULL. |
-| `attachments` | TEXT (JSON) | Lista de adjuntos: `[{"name":"factura.pdf","url":"..."}]` |
+| `raw_message_id` | TEXT | Header `Message-Id` RFC 5322 del email original (incluyendo los `<...>`) para evitar duplicados. UNIQUE cuando no es NULL. (v1.3) |
+| `attachments` | TEXT (JSON) | Lista de adjuntos con metadatos: `[{"name":"factura.pdf","size_bytes":12345,"url":null}]`. En MVP `url` siempre `null` (solo metadatos, no descargamos el contenido). (v1.3) |
 | `client_notified_at` | DATETIME | Cuándo se envió el email de confirmación |
 | `last_updated_at` | DATETIME | Última modificación |
 | `synced_to_sheets_at` | DATETIME NULL | Cuándo se sincronizó a Google Sheets. `NULL` mientras esté pendiente. (v1.2) |
@@ -153,19 +160,19 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 ### 5.1. Entrada de email → Ticket
 
 ```
-[Gmail INBOX]
-     ↓ (polling cada 60s vía Gmail API)
+[Buzón soportetelycoposio@gmail.com]
+     ↓ (polling cada 60s vía IMAP)
 [Worker Python]
-     ↓ filtra emails no procesados (label `procesado` no presente)
-     ↓ extrae remitente, asunto, cuerpo, adjuntos
+     ↓ filtra emails sin keyword IMAP `TLY_PROCESSED`
+     ↓ extrae remitente, asunto, cuerpo, metadatos de adjuntos
      ↓ llama a Anthropic API → categoría + confianza
      ↓ genera ID único (TLY-AAAA-NNNN)
 [SQLite] ← inserta ticket
-[Google Sheets] ← inserta ticket (vía API)
+[Google Sheets] ← inserta ticket (vía API, en background)
      ↓
-[Gmail API] → envía confirmación al cliente
-[Gmail API] → envía notificación interna a soporte@telycoposio.com
-[Gmail API] → marca el email original con label `procesado`
+[SMTP] → envía confirmación al cliente
+[SMTP] → envía notificación interna a soporte@telycoposio.com
+[IMAP] → marca el email original con keyword `TLY_PROCESSED`
 ```
 
 ### 5.2. Login y consulta web
@@ -181,7 +188,7 @@ Plataforma interna de gestión de tickets de atención al cliente para **Telycop
 [FastAPI] → /tickets/TLY-2026-0001 → vista detalle
      ↓
 [Usuario] → escribe respuesta y envía
-[Gmail API] → envía email al cliente
+[SMTP] → envía email al cliente (con `In-Reply-To` para hilar)
 [SQLite + Sheets] → registra que se respondió
 ```
 
@@ -212,7 +219,7 @@ telycoposio-tickets/
 │   │   └── user.py
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── gmail.py             # Lectura/envío vía Gmail API
+│   │   ├── email_client.py      # IMAP (lectura) + SMTP (envío) (v1.3)
 │   │   ├── classifier.py        # Llamada a Anthropic API
 │   │   ├── ticket_service.py    # Lógica de negocio de tickets
 │   │   └── auth.py              # Login, sesiones, bcrypt
@@ -256,11 +263,14 @@ APP_PORT=8000
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 
-# === Gmail (OAuth) ===
-GMAIL_ADDRESS=soportetelycoposio@gmail.com
-GMAIL_CREDENTIALS_PATH=/app/secrets/gmail_credentials.json
-GMAIL_TOKEN_PATH=/app/secrets/gmail_token.json
-GMAIL_POLL_INTERVAL_SECONDS=60
+# === Email entrante / saliente — IMAP + SMTP con App Password (v1.3) ===
+EMAIL_ADDRESS=soportetelycoposio@gmail.com
+EMAIL_APP_PASSWORD=<16-char-app-password-de-google>
+EMAIL_IMAP_HOST=imap.gmail.com
+EMAIL_IMAP_PORT=993
+EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_POLL_INTERVAL_SECONDS=60
 
 # === Notificación interna ===
 INTERNAL_NOTIFICATION_EMAIL=soporte@telycoposio.com
@@ -285,7 +295,7 @@ TICKET_YEAR_AUTO=true
 - **Datos almacenados:** identificadores mínimos necesarios (nombre, email/teléfono, contenido del mensaje).
 - **Conservación:** revisar política. Propuesta inicial: 24 meses desde el cierre del ticket, después anonimización.
 - **Derechos ARCO:** debe existir un procedimiento para que un cliente pueda solicitar acceso, rectificación o borrado de sus datos.
-- **Cifrado:** las credenciales y tokens se almacenan en archivos con permisos `600`. Las contraseñas de usuarios con `bcrypt`.
+- **Cifrado:** las credenciales y tokens (incluida `EMAIL_APP_PASSWORD`) se almacenan en archivos con permisos `600`. Las contraseñas de usuarios con `bcrypt`.
 - **Acceso:** restringido por VPN + login.
 - **Registro de actividades de tratamiento:** documentar en el RAT de la empresa.
 - **Aviso de privacidad:** incluir nota en el email de confirmación al cliente: *"Tus datos serán tratados por Telycoposio para gestionar tu solicitud. Más información: [enlace política]."*
@@ -308,14 +318,14 @@ TICKET_YEAR_AUTO=true
 ### Fase 1 — MVP Email + Web (estimado 1-2 semanas con Claude Code)
 
 - [ ] Setup del proyecto (estructura, dependencias, Docker).
-- [ ] Cuenta Gmail creada y configurada.
+- [ ] Cuenta Gmail creada y configurada con 2FA + App Password (v1.3).
 - [ ] Hoja de Google Sheets creada con la estructura de columnas.
 - [ ] Service account de Google con acceso a la hoja.
 - [ ] Cuenta de Anthropic con API key.
-- [ ] Worker que lee Gmail cada 60s y crea tickets.
+- [ ] Worker que lee el buzón vía IMAP cada 60s y crea tickets (v1.3).
 - [ ] Categorización con Claude Haiku funcionando.
 - [ ] Web local con login, listado y detalle de tickets.
-- [ ] Respuesta al cliente desde la web.
+- [ ] Respuesta al cliente desde la web (vía SMTP).
 - [ ] Email automático de confirmación al cliente.
 - [ ] Notificación interna a `soporte@telycoposio.com`.
 - [ ] Despliegue en servidor de oficina con Docker Compose.
@@ -343,10 +353,11 @@ TICKET_YEAR_AUTO=true
 
 | Riesgo | Probabilidad | Impacto | Mitigación |
 |---|---|---|---|
-| Gmail API limita cuota | Baja | Medio | Polling cada 60s en lugar de cada 5s; usar webhooks push de Gmail más adelante |
+| Gmail limita conexiones IMAP/SMTP | Baja | Medio | Polling cada 60s; reutilizar conexión IMAP entre iteraciones; backoff exponencial ante errores |
+| Google retira App Passwords (v1.3) | Baja-Media | Alto | Migrar a Google Workspace + OAuth 2.0 con app Internal. Coste estimado: ~6 €/usuario/mes |
 | Categorización IA errónea | Media | Bajo | Permitir override manual; revisar tickets con `confidence < 0.7` |
 | Servidor de oficina se apaga | Media | Alto | Backup diario + UPS recomendado |
-| Pérdida de credenciales OAuth | Baja | Alto | Documentar reautenticación; alertas si tokens fallan |
+| Filtración de la `EMAIL_APP_PASSWORD` (v1.3) | Baja | Alto | Archivo `.env` con permisos `600`, fuera del repo. Si ocurre, revocar la app password desde la cuenta Google y regenerar. |
 | Spam recibido como ticket | Alta | Bajo | Filtros previos en Gmail (filter de spam, lista negra) |
 | Volumen crece > 50/semana | Media | Bajo | Arquitectura permite escalar; revisar a los 6 meses |
 
@@ -356,7 +367,9 @@ TICKET_YEAR_AUTO=true
 
 - **Ticket:** unidad de solicitud o incidencia recibida por cualquier canal.
 - **MVP:** Mínimo Producto Viable — la versión más pequeña útil.
-- **OAuth 2.0:** protocolo estándar para autenticarse contra APIs de Google.
+- **App Password (v1.3):** contraseña de 16 caracteres generada por Google para que aplicaciones de terceros accedan a una cuenta con 2FA activado, usando IMAP / SMTP estándar. No caduca por inactividad y se revoca individualmente desde la consola de la cuenta.
+- **IMAP keyword (v1.3):** etiqueta arbitraria que el cliente IMAP puede asignar a un mensaje (`STORE +FLAGS keyword`). En esta app usamos `TLY_PROCESSED` para marcar mensajes ya convertidos en ticket.
+- **OAuth 2.0:** protocolo estándar para autenticarse contra APIs de Google. (No usado en v1.3 — ver §3.)
 - **Webhook:** URL pública que recibe notificaciones de eventos (no usado en Fase 1, sí en Fase 2 para WhatsApp).
 - **VPN:** Red Privada Virtual; permite el acceso seguro al servidor desde fuera de la oficina.
 - **RGPD:** Reglamento General de Protección de Datos (UE).

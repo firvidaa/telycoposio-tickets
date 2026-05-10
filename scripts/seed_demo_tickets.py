@@ -170,8 +170,11 @@ def _demo_tickets(now: datetime | None = None) -> list[Ticket]:
             category_reasoning="Incidencia con cliente de email; usuario adjunta captura.",
             needs_review=False,
             attachments=[
-                Attachment(name="captura_error.png", url="https://example.invalid/captura.png"),
-                Attachment(name="log.txt", url="https://example.invalid/log.txt"),
+                # En MVP (v1.3) solo guardamos metadatos. ``url`` queda en None
+                # porque no descargamos el contenido; el detalle muestra
+                # nombre + tamanyo sin link.
+                Attachment(name="captura_error.png", size_bytes=58_400),
+                Attachment(name="log.txt", size_bytes=1_240),
             ],
             last_updated_at=at(5),
         ),

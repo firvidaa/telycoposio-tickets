@@ -7,7 +7,7 @@ Fase 3) en un unico sistema de tickets numerados y categorizados automaticamente
 con IA (Claude Haiku).
 
 > Para el detalle funcional, modelo de datos y plan de fases, ver [`SPEC.md`](./SPEC.md).
-> Version actual del SPEC: **v1.2**.
+> Version actual del SPEC: **v1.3**.
 
 ---
 
@@ -16,7 +16,7 @@ con IA (Claude Haiku).
 - **Python 3.11+** con FastAPI + Jinja2 + Tailwind (via CDN).
 - **SQLite** local como fuente de verdad operativa.
 - **Google Sheets** como capa visible para humanos (sincronizacion en background).
-- **Gmail API** (OAuth 2.0) para entrada y salida de email.
+- **IMAP + SMTP** sobre Gmail con App Password (v1.3) para entrada y salida de email.
 - **Anthropic API** (Claude Haiku 4.5) para categorizar tickets.
 - Despliegue final en **Docker Compose** sobre servidor de oficina.
 
@@ -113,6 +113,44 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 - [x] Paso 5a — Auth (bcrypt + cookie firmada con `itsdangerous`), login/logout, rate limit.
 - [x] Paso 5b — Listado y detalle de tickets (read-only) con filtros, paginacion y datos demo.
 - [x] Paso 6 — Clasificador con Anthropic API (Claude Haiku 4.5), tool use forzado y defensa contra prompt injection.
+- [x] Paso 7 — Cliente IMAP/SMTP con App Password (sustituye Gmail API + OAuth segun SPEC v1.3).
+
+---
+
+## Cliente de email (Paso 7)
+
+`app.services.email_client.EmailClient` lee del INBOX via IMAP, marca
+mensajes con el keyword `TLY_PROCESSED` y envia respuestas via SMTP.
+Autenticacion con **App Password** de Google (cuenta con 2FA activado).
+Sincrono — el worker del Paso 8 lo invocara dentro de
+`asyncio.to_thread(...)`.
+
+**Marca de procesado**: keyword IMAP custom `TLY_PROCESSED` (`STORE +FLAGS`),
+no la etiqueta nativa de Gmail. Asi es portable a cualquier proveedor IMAP.
+
+**Variables de entorno** (todas en `.env`):
+
+```ini
+EMAIL_ADDRESS=soportetelycoposio@gmail.com
+EMAIL_APP_PASSWORD=<16 caracteres sin espacios>
+EMAIL_IMAP_HOST=imap.gmail.com   # default
+EMAIL_IMAP_PORT=993              # default
+EMAIL_SMTP_HOST=smtp.gmail.com   # default
+EMAIL_SMTP_PORT=587              # default
+EMAIL_POLL_INTERVAL_SECONDS=60   # default
+```
+
+`EMAIL_ADDRESS` y `EMAIL_APP_PASSWORD` son **obligatorias**: la app no
+arranca si faltan. Las cuatro de host/port tienen defaults a Gmail.
+
+Para verificar manualmente contra la cuenta real:
+
+```powershell
+python scripts/email_smoke.py --list
+python scripts/email_smoke.py --get <UID>
+python scripts/email_smoke.py --send-test destinatario@ejemplo.com
+python scripts/email_smoke.py --mark-processed <UID>
+```
 
 ---
 

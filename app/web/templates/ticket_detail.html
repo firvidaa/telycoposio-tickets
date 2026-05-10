@@ -70,7 +70,11 @@
         <h3 class="text-sm font-medium text-slate-500 mb-2">Adjuntos</h3>
         <ul class="list-disc list-inside text-sm">
             {% for a in ticket.attachments %}
-            <li><a href="{{ a.url }}" class="text-sky-700 hover:underline">{{ a.name }}</a></li>
+            <li>
+                {% if a.url %}<a href="{{ a.url }}" class="text-sky-700 hover:underline">{{ a.name }}</a>
+                {% else %}<span>{{ a.name }}</span>{% endif %}
+                {% if a.size_bytes %}<span class="text-slate-500 text-xs ml-1">({{ a.size_bytes | human_size }})</span>{% endif %}
+            </li>
             {% endfor %}
         </ul>
     </section>

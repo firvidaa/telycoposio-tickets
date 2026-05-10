@@ -102,6 +102,8 @@ def _settings() -> Settings:
         APP_SECRET_KEY="x" * 32,
         ANTHROPIC_API_KEY="sk-ant-test",
         ANTHROPIC_MODEL="claude-haiku-4-5-20251001",
+        EMAIL_ADDRESS="test@example.com",
+        EMAIL_APP_PASSWORD="abcdefghijklmnop",
     )
 
 
