@@ -1,0 +1,46 @@
+{# Macros compartidas: cabecera autenticada y badges de estado/categoria/review. #}
+
+{% macro app_header(user) %}
+<header class="bg-white border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+        <a href="/tickets" class="font-semibold text-slate-900">Telycoposio Tickets</a>
+        <div class="flex items-center gap-3 text-sm">
+            <span class="text-slate-600">{{ user.display_name }}</span>
+            <form method="post" action="/logout">
+                <button type="submit"
+                    class="rounded-md border border-slate-300 px-3 py-1 hover:bg-slate-100 transition">
+                    Cerrar sesion
+                </button>
+            </form>
+        </div>
+    </div>
+</header>
+{% endmacro %}
+
+{% macro status_badge(value) %}
+{% set v = value.value if value.value is defined else value %}
+<span class="px-2 py-0.5 rounded text-xs font-medium
+    {% if v == 'NEW' %}bg-blue-100 text-blue-800
+    {% elif v == 'IN_PROGRESS' %}bg-yellow-100 text-yellow-800
+    {% elif v == 'WAITING' %}bg-orange-100 text-orange-800
+    {% else %}bg-slate-200 text-slate-700{% endif %}">
+    {{ v | status_label }}
+</span>
+{% endmacro %}
+
+{% macro category_badge(value) %}
+{% set v = (value.value if value and value.value is defined else value) %}
+<span class="px-2 py-0.5 rounded text-xs font-medium
+    {% if v == 'ADMINISTRATIVO' %}bg-violet-100 text-violet-800
+    {% elif v == 'COMERCIAL' %}bg-emerald-100 text-emerald-800
+    {% elif v == 'SOPORTE' %}bg-sky-100 text-sky-800
+    {% else %}bg-slate-100 text-slate-600 italic{% endif %}">
+    {{ v | category_label }}
+</span>
+{% endmacro %}
+
+{% macro review_badge() %}
+<span class="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
+    Revision
+</span>
+{% endmacro %}

@@ -70,15 +70,22 @@ Docker se usa solo para el despliegue final en el servidor de oficina.
    python scripts/init_db.py
    ```
    Crea `data/app.db` con las tablas `tickets` y `users` (idempotente).
-7. Anadir al menos un usuario para poder hacer login (cuando exista la web):
+7. Anadir al menos un usuario para poder hacer login:
    ```powershell
    python scripts/add_user.py --username alfredo --display-name "Alfredo" --role admin
    ```
-8. Arrancar el servidor:
+8. (Opcional) Sembrar tickets de demostracion para ver la UI con datos:
+   ```powershell
+   python scripts/seed_demo_tickets.py            # idempotente
+   python scripts/seed_demo_tickets.py --reset    # recrea los demo
+   ```
+   La marca canonica de un ticket demo es `from_email = 'demo@ejemplo.com'`,
+   asi se purgan limpiamente con un solo `WHERE` cuando vayas a produccion.
+9. Arrancar el servidor:
    ```powershell
    uvicorn app.main:app --reload
    ```
-9. Verificar que vive: `curl http://localhost:8000/health` -> `{"status":"ok"}`.
+10. Verificar que vive: `curl http://localhost:8000/health` -> `{"status":"ok"}`.
 
 ---
 
@@ -104,7 +111,7 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 - [x] Paso 3 — Modelo de datos, SQLite y scripts de inicializacion (SPEC v1.2).
 - [x] Paso 4 — Configuracion centralizada (`app.config`) y servicio de tickets (`app.services.ticket_service`).
 - [x] Paso 5a — Auth (bcrypt + cookie firmada con `itsdangerous`), login/logout, rate limit.
-- [ ] Paso 5b — Listado y detalle de tickets (read-only).
+- [x] Paso 5b — Listado y detalle de tickets (read-only) con filtros, paginacion y datos demo.
 
 ---
 

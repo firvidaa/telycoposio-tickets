@@ -260,3 +260,111 @@ def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> Ticket | None:
     if row is None:
         return None
     return from_db_row(row)
+
+
+# ---------------------------------------------------------------------------
+# Listado y conteo
+# ---------------------------------------------------------------------------
+
+#: Limites de paginacion. La ruta los acota antes; aqui solo aceptamos lo
+#: que pase el llamante (las rutas usan ``Query(..., ge=1, le=200)``).
+DEFAULT_LIST_LIMIT: Final[int] = 50
+MAX_LIST_LIMIT: Final[int] = 200
+
+
+def _build_filters(
+    *,
+    statuses: list[TicketStatus] | None,
+    category: TicketCategory | None,
+    only_uncategorized: bool,
+    needs_review: bool | None,
+) -> tuple[str, list[object]]:
+    """Construye la clausula WHERE y la lista de args para los filtros dados.
+
+    ``statuses=None`` significa "no filtrar por status"; ``[]`` (lista vacia)
+    significa "ninguno coincide" — devolvemos un WHERE imposible para que el
+    resultado sea vacio sin ramas adicionales.
+    """
+    clauses: list[str] = []
+    args: list[object] = []
+
+    if statuses is not None:
+        if not statuses:
+            return ("WHERE 1 = 0", [])
+        placeholders = ",".join(["?"] * len(statuses))
+        clauses.append(f"status IN ({placeholders})")
+        args.extend(s.value for s in statuses)
+
+    if only_uncategorized:
+        clauses.append("category IS NULL")
+    elif category is not None:
+        clauses.append("category = ?")
+        args.append(category.value)
+
+    if needs_review is not None:
+        clauses.append("needs_review = ?")
+        args.append(int(needs_review))
+
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return (where, args)
+
+
+def list_tickets(
+    conn: sqlite3.Connection,
+    *,
+    statuses: list[TicketStatus] | None = None,
+    category: TicketCategory | None = None,
+    only_uncategorized: bool = False,
+    needs_review: bool | None = None,
+    limit: int = DEFAULT_LIST_LIMIT,
+    offset: int = 0,
+) -> list[Ticket]:
+    """Lista tickets ordenados por ``created_at DESC`` con filtros y paginacion.
+
+    Filtros:
+    - ``statuses``: lista blanca a filtrar con ``status IN (...)``. ``None``
+      no filtra; lista vacia devuelve resultado vacio.
+    - ``category`` vs. ``only_uncategorized``: mutuamente excluyentes en la
+      practica. Si ``only_uncategorized=True`` ganamos esa rama y se ignora
+      ``category``.
+    - ``needs_review``: ``True`` / ``False`` / ``None`` (no filtrar).
+
+    La ruta valida ``limit`` y ``offset`` con ``Query(..., ge=..., le=...)``;
+    aqui no re-validamos para no duplicar la regla.
+    """
+    where, args = _build_filters(
+        statuses=statuses,
+        category=category,
+        only_uncategorized=only_uncategorized,
+        needs_review=needs_review,
+    )
+    sql = (
+        f"SELECT * FROM tickets {where} "
+        "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    )
+    rows = conn.execute(sql, [*args, limit, offset]).fetchall()
+    return [from_db_row(r) for r in rows]
+
+
+def count_tickets(
+    conn: sqlite3.Connection,
+    *,
+    statuses: list[TicketStatus] | None = None,
+    category: TicketCategory | None = None,
+    only_uncategorized: bool = False,
+    needs_review: bool | None = None,
+) -> int:
+    """Cuenta tickets que cumplen los mismos filtros que ``list_tickets``.
+
+    No la usamos para mostrar "X de N" en el listado (decision: paginacion
+    sin total para evitar un ``COUNT(*)`` por request), pero si para tests
+    y para el script de seed.
+    """
+    where, args = _build_filters(
+        statuses=statuses,
+        category=category,
+        only_uncategorized=only_uncategorized,
+        needs_review=needs_review,
+    )
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM tickets {where}", args).fetchone()
+    return int(row["n"])

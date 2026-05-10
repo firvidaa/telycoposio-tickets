@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% from "_macros.html" import app_header, status_badge, category_badge, review_badge %}
+{% block title %}Tickets · Telycoposio{% endblock %}
+{% block layout %}
+{{ app_header(user) }}
+<main class="max-w-6xl mx-auto px-6 py-6">
+
+    <h1 class="text-2xl font-semibold mb-4">Tickets</h1>
+
+    {% if implicit_status_filter %}
+    <div class="mb-4 rounded-lg bg-sky-50 border border-sky-200 px-4 py-2 text-sm text-sky-900 flex items-center justify-between">
+        <span>Mostrando solo tickets activos (no cerrados).</span>
+        <a href="{{ url_show_all }}" class="font-medium underline hover:no-underline">Ver todos &rarr;</a>
+    </div>
+    {% endif %}
+
+    <form method="get" action="/tickets"
+          class="bg-white border border-slate-200 rounded-lg p-3 mb-4 flex flex-wrap gap-3 items-end">
+        <div>
+            <label class="block text-xs text-slate-600 mb-1" for="f-status">Estado</label>
+            <select id="f-status" name="status"
+                    class="rounded border border-slate-300 px-2 py-1 text-sm">
+                <option value="" {% if status_value == "" %}selected{% endif %}>Activos (por defecto)</option>
+                <option value="ALL" {% if status_value == "ALL" %}selected{% endif %}>Todos</option>
+                <option value="NEW" {% if status_value == "NEW" %}selected{% endif %}>Nuevo</option>
+                <option value="IN_PROGRESS" {% if status_value == "IN_PROGRESS" %}selected{% endif %}>En curso</option>
+                <option value="WAITING" {% if status_value == "WAITING" %}selected{% endif %}>En espera</option>
+                <option value="CLOSED" {% if status_value == "CLOSED" %}selected{% endif %}>Cerrado</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-600 mb-1" for="f-category">Categoria</label>
+            <select id="f-category" name="category"
+                    class="rounded border border-slate-300 px-2 py-1 text-sm">
+                <option value="" {% if category_value == "" %}selected{% endif %}>Todas</option>
+                <option value="ADMINISTRATIVO" {% if category_value == "ADMINISTRATIVO" %}selected{% endif %}>Administrativo</option>
+                <option value="COMERCIAL" {% if category_value == "COMERCIAL" %}selected{% endif %}>Comercial</option>
+                <option value="SOPORTE" {% if category_value == "SOPORTE" %}selected{% endif %}>Soporte</option>
+                <option value="UNCATEGORIZED" {% if category_value == "UNCATEGORIZED" %}selected{% endif %}>Sin clasificar</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs text-slate-600 mb-1" for="f-review">Revision</label>
+            <select id="f-review" name="needs_review"
+                    class="rounded border border-slate-300 px-2 py-1 text-sm">
+                <option value="" {% if needs_review_value == "" %}selected{% endif %}>Cualquiera</option>
+                <option value="true" {% if needs_review_value == "true" %}selected{% endif %}>Solo a revisar</option>
+                <option value="false" {% if needs_review_value == "false" %}selected{% endif %}>Sin revision</option>
+            </select>
+        </div>
+        <div class="flex gap-2">
+            <button type="submit"
+                    class="rounded bg-slate-900 text-white px-3 py-1 text-sm font-medium hover:bg-slate-800 transition">
+                Aplicar
+            </button>
+            <a href="{{ url_clear_filters }}"
+               class="rounded border border-slate-300 px-3 py-1 text-sm hover:bg-slate-100 transition">
+                Limpiar
+            </a>
+        </div>
+    </form>
+
+    {% if tickets %}
+    <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-slate-600 text-left">
+                <tr>
+                    <th class="px-3 py-2 font-medium">ID</th>
+                    <th class="px-3 py-2 font-medium">Estado</th>
+                    <th class="px-3 py-2 font-medium">Categoria</th>
+                    <th class="px-3 py-2 font-medium">Asunto</th>
+                    <th class="px-3 py-2 font-medium">De</th>
+                    <th class="px-3 py-2 font-medium whitespace-nowrap">Creado</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for t in tickets %}
+                <tr class="hover:bg-slate-50">
+                    <td class="px-3 py-2 font-mono text-xs">
+                        <a href="/tickets/{{ t.id }}" class="text-sky-700 hover:underline">{{ t.id }}</a>
+                    </td>
+                    <td class="px-3 py-2">{{ status_badge(t.status) }}</td>
+                    <td class="px-3 py-2">
+                        {{ category_badge(t.category) }}
+                        {% if t.needs_review %}{{ review_badge() }}{% endif %}
+                    </td>
+                    <td class="px-3 py-2">
+                        <a href="/tickets/{{ t.id }}" class="hover:underline">{{ t.subject }}</a>
+                    </td>
+                    <td class="px-3 py-2 text-slate-600">
+                        {{ t.from_name or t.from_email or t.from_phone or "—" }}
+                    </td>
+                    <td class="px-3 py-2 text-slate-600 whitespace-nowrap">
+                        {{ t.created_at | madrid }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
+        No hay tickets que coincidan con los filtros.
+    </div>
+    {% endif %}
+
+    {% if url_prev or url_next %}
+    <nav class="flex items-center justify-between mt-4 text-sm">
+        <div>
+            {% if url_prev %}
+            <a href="{{ url_prev }}"
+               class="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 transition">
+                &larr; Anteriores
+            </a>
+            {% endif %}
+        </div>
+        <div class="text-slate-500">
+            Mostrando {{ offset + 1 }}–{{ offset + tickets|length }}
+        </div>
+        <div>
+            {% if url_next %}
+            <a href="{{ url_next }}"
+               class="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 transition">
+                Siguientes &rarr;
+            </a>
+            {% endif %}
+        </div>
+    </nav>
+    {% endif %}
+
+</main>
+{% endblock %}

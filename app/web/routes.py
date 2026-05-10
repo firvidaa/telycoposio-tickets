@@ -1,20 +1,21 @@
-"""Rutas web: login, logout y placeholder de ``/tickets``.
+"""Rutas web: login, logout, listado y detalle de tickets.
 
-El listado y el detalle reales de tickets llegan en el Paso 5b. En este
-paso ya hay una ruta ``/tickets`` minima que requiere login y muestra un
-mensaje de bienvenida; sirve para verificar end-to-end el flujo de
-autenticacion antes de tocar la UI de tickets.
+Dos patrones de proteccion:
 
-Conexion a SQLite via dependency ``get_db_connection``: se abre una
-conexion por request y se cierra al salir. El acceso a usuarios pasa por
-``app.services.auth`` (modulo puro, no acoplado a FastAPI).
+- ``current_user`` (dependency read-only): para rutas que pueden ir con o sin
+  sesion (``/`` y ``GET /login`` deciden ellas mismas que hacer en cada caso).
+- ``require_user_html`` (dependency estricta): para rutas que solo tienen
+  sentido logueado (``/tickets``, ``/tickets/{id}``). Si no hay sesion lanza
+  ``SessionRequiredError``, que un exception handler global traduce a 303
+  hacia ``/login`` y limpia la cookie stale. **Fail-secure por defecto:**
+  si en el futuro alguien anyade una ruta nueva con esta dependency y
+  olvida un ``if user is None`` en el cuerpo, la app sigue rechazando
+  peticiones anonimas.
 
-Sliding renewal de la cookie de sesion: cada handler protegido llama a
-``_render_with_session`` (o re-emite la cookie en su redirect) para que un
-empleado activo nunca pierda la sesion. La logica vive en los handlers y
-no en la dependency porque cuando se devuelve un ``TemplateResponse``
-directamente, los headers que la dependency ponga en su ``Response``
-inyectada no se propagan a la respuesta final.
+Sliding renewal: cada handler protegido usa ``_render_with_session`` o
+re-emite la cookie en su redirect. La dependency no muta la respuesta
+porque cuando un handler devuelve ``TemplateResponse`` los headers
+inyectados desde ``Response`` no se propagan.
 """
 
 from __future__ import annotations
@@ -22,15 +23,23 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterator
+from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, Request, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import Settings, get_settings
 from app.db.sqlite import get_connection
+from app.models.ticket import TicketCategory, TicketStatus
 from app.models.user import User
 from app.services.auth import (
     SESSION_COOKIE_NAME,
@@ -42,19 +51,69 @@ from app.services.auth import (
     verify_password,
     verify_session_token,
 )
+from app.services.ticket_service import get_ticket, list_tickets
 
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+_LOCAL_TZ = ZoneInfo("Europe/Madrid")
+
+
+def _format_madrid(dt: datetime | None, fmt: str = "%d/%m/%Y %H:%M") -> str:
+    """Filtro Jinja: convierte UTC a Europe/Madrid y formatea.
+
+    SPEC §4: la conversion a hora local solo se hace al renderizar.
+    """
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_LOCAL_TZ).strftime(fmt)
+
+
+_STATUS_LABELS: dict[str, str] = {
+    "NEW": "Nuevo",
+    "IN_PROGRESS": "En curso",
+    "WAITING": "En espera",
+    "CLOSED": "Cerrado",
+}
+_CATEGORY_LABELS: dict[str, str] = {
+    "ADMINISTRATIVO": "Administrativo",
+    "COMERCIAL": "Comercial",
+    "SOPORTE": "Soporte",
+}
+
+
+def _status_label(value: object) -> str:
+    return _STATUS_LABELS.get(str(value), str(value))
+
+
+def _category_label(value: object) -> str:
+    if value is None or value == "":
+        return "Sin clasificar"
+    return _CATEGORY_LABELS.get(str(value), str(value))
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+templates.env.filters["madrid"] = _format_madrid
+templates.env.filters["status_label"] = _status_label
+templates.env.filters["category_label"] = _category_label
 
 router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Dependencies
+# Auth: dependencies y exception handler
 # ---------------------------------------------------------------------------
+
+
+class SessionRequiredError(Exception):
+    """Marca que una ruta protegida no recibio una sesion valida.
+
+    El handler global registrado en ``app.main`` la traduce en un 303 hacia
+    ``/login`` y limpia la cookie del cliente si la habia.
+    """
 
 
 def get_db_connection(
@@ -84,18 +143,104 @@ def current_user(
     return get_user_by_id(conn, user_id)
 
 
-def require_user(user: User | None = Depends(current_user)) -> User:
-    """Dependency estricta: 401 si no hay sesion. Pensada para APIs JSON o tests.
+def require_user_html(user: User | None = Depends(current_user)) -> User:
+    """Dependency estricta: lanza ``SessionRequiredError`` si no hay sesion.
 
-    Las rutas HTML usan ``current_user`` y deciden ellas mismas si renderizar
-    o redirigir, porque desde una ``HTTPException`` no se puede devolver un
-    ``RedirectResponse``.
+    Pensada para rutas HTML protegidas. El handler global se encarga del
+    redirect a ``/login`` y de limpiar la cookie stale.
     """
     if user is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        raise SessionRequiredError()
     return user
+
+
+def _wants_html(request: Request) -> bool:
+    """Indica si el cliente prefiere HTML (navegador) sobre JSON (cliente API).
+
+    Regla: HTML solo si el cliente lo declara explicitamente en ``Accept``.
+    Sin ``Accept``, ``Accept: */*`` o ``Accept: application/json`` → JSON.
+    Asi un script de monitorizacion (curl sin Accept, o cliente que pide
+    JSON) sigue recibiendo respuestas estructuradas el dia que anyadamos
+    endpoints REST propios.
+    """
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept
+
+
+def not_found_html(request: Request) -> Response:
+    """Render HTML del 404. Distingue entre 'ticket' y 'pagina' segun el path."""
+    is_ticket = request.url.path.startswith("/tickets/")
+    title = "Ticket no encontrado" if is_ticket else "Pagina no encontrada"
+    if is_ticket:
+        message = "El ticket que buscas no existe o el ID no tiene un formato valido."
+    else:
+        message = "La direccion que has visitado no existe en esta aplicacion."
+    return templates.TemplateResponse(
+        request=request,
+        name="error_404.html",
+        context={"title": title, "message": message},
+        status_code=status.HTTP_404_NOT_FOUND,
+    )
+
+
+def http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> Response:
+    """Captura ``HTTPException``s de Starlette/FastAPI.
+
+    Para 404, renderiza HTML cuando el cliente acepta ``text/html``; en
+    cualquier otro caso (otros statuses, cliente API), JSON con la misma
+    forma que el handler default de FastAPI.
+    """
+    if exc.status_code == status.HTTP_404_NOT_FOUND and _wants_html(request):
+        return not_found_html(request)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> Response:
+    """Captura errores de validacion de query/body/path.
+
+    HTML para navegador, JSON estructurado (mismo formato que el default de
+    FastAPI) para clientes API.
+    """
+    if _wants_html(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="error_422.html",
+            context={},
+            status_code=422,
+        )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
+def session_required_handler(
+    request: Request, exc: SessionRequiredError
+) -> RedirectResponse:
+    """Traduce ``SessionRequiredError`` en redirect a ``/login`` con cookie limpia.
+
+    La cookie se borra con flags fijos (``HttpOnly`` + ``SameSite=Lax``) y
+    sin pasar por settings, porque los handlers de excepcion no pueden
+    inyectar dependencies y ``get_settings()`` directo se saltaria los
+    overrides en tests. ``Secure`` no afecta al borrado, solo al envio.
+    """
+    redirect = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    if SESSION_COOKIE_NAME in request.cookies:
+        redirect.delete_cookie(
+            key=SESSION_COOKIE_NAME,
+            path="/",
+            httponly=True,
+            samesite="lax",
+        )
+    return redirect
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +286,7 @@ def _render_with_session(
     request: Request,
     user: User,
     settings: Settings,
+    status_code: int = 200,
     **context: Any,
 ) -> Response:
     """Renderiza una plantilla y re-emite la cookie de sesion (sliding)."""
@@ -148,23 +294,23 @@ def _render_with_session(
         request=request,
         name=template,
         context={"user": user, **context},
+        status_code=status_code,
     )
     assert user.id is not None  # garantizado por SQLite (PK AUTOINCREMENT)
     _set_session_cookie(response, user.id, settings)
     return response
 
 
-def _redirect_unauthenticated(
+def _redirect_anonymous(
     request: Request,
     settings: Settings,
     *,
     target: str = "/login",
 ) -> RedirectResponse:
-    """Redirige al ``target`` y limpia cualquier cookie de sesion stale.
+    """Redirige a ``/login`` y limpia cualquier cookie stale.
 
-    Si llegamos aqui con cookie pero ``current_user`` devolvio ``None``, la
-    cookie es invalida (firma mala, expirada, o uid huerfano). La quitamos
-    para no molestar al cliente en cada request.
+    Solo se usa en rutas que **no** usan ``require_user_html`` (p. ej. ``/``,
+    porque en ese caso queremos un redirect distinto segun haya sesion o no).
     """
     redirect = RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
     if SESSION_COOKIE_NAME in request.cookies:
@@ -178,8 +324,61 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _query_url(request: Request, **overrides: object) -> str:
+    """Construye una URL relativa con los query params actuales + ``overrides``.
+
+    Usado para los enlaces de paginacion y para el banner de filtros: cada
+    enlace hereda los filtros activos y solo cambia los parametros indicados.
+    Pasar ``key=None`` elimina ese parametro.
+    """
+    params: dict[str, str] = dict(request.query_params)
+    for key, value in overrides.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = str(value)
+    qs = urlencode(params)
+    return f"{request.url.path}?{qs}" if qs else request.url.path
+
+
 # ---------------------------------------------------------------------------
-# Rutas
+# Filtros del listado
+# ---------------------------------------------------------------------------
+
+#: Statuses considerados "activos" cuando no se pasa filtro explicito. Se
+#: muestran por defecto; los CLOSED quedan ocultos hasta que el usuario hace
+#: clic en "Ver todos" (ver template).
+_ACTIVE_STATUSES: tuple[TicketStatus, ...] = (
+    TicketStatus.NEW,
+    TicketStatus.IN_PROGRESS,
+    TicketStatus.WAITING,
+)
+
+
+class StatusFilter(str, Enum):
+    """Valores aceptados en ``?status=``. Incluye ``ALL`` (sintetico)."""
+
+    NEW = "NEW"
+    IN_PROGRESS = "IN_PROGRESS"
+    WAITING = "WAITING"
+    CLOSED = "CLOSED"
+    ALL = "ALL"
+
+
+class CategoryFilter(str, Enum):
+    """Valores aceptados en ``?category=``. ``UNCATEGORIZED`` filtra ``NULL``."""
+
+    ADMINISTRATIVO = "ADMINISTRATIVO"
+    COMERCIAL = "COMERCIAL"
+    SOPORTE = "SOPORTE"
+    UNCATEGORIZED = "UNCATEGORIZED"
+
+
+_PAGE_SIZE = 50
+
+
+# ---------------------------------------------------------------------------
+# Rutas publicas / con awareness de sesion
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +390,7 @@ def root(
 ) -> Response:
     """Redirige al listado si hay sesion, a /login si no."""
     if user is None:
-        return _redirect_unauthenticated(request, settings)
+        return _redirect_anonymous(request, settings)
     redirect = RedirectResponse(url="/tickets", status_code=status.HTTP_303_SEE_OTHER)
     assert user.id is not None
     _set_session_cookie(redirect, user.id, settings)
@@ -227,13 +426,12 @@ def login_submit(
 ) -> Response:
     """Procesa el login.
 
-    Orden de comprobaciones:
+    Orden:
 
-    1. **Rate limit** por ``(ip, username)``. Si esta bloqueado, respondemos
-       429 sin tocar la BD ni bcrypt (bcrypt es caro a proposito).
+    1. **Rate limit** por ``(ip, username)``. Si esta bloqueado, 429 sin
+       tocar la BD ni bcrypt.
     2. **Verificacion de credenciales**. Si fallan, registramos el intento
-       en el rate limiter y volvemos a renderizar el formulario con error
-       generico (no distinguimos "usuario no existe" vs. "password mala").
+       y volvemos a renderizar el formulario con error generico.
     3. **Exito**: reseteamos contadores, ponemos la cookie y redirigimos.
     """
     ip = _client_ip(request)
@@ -280,25 +478,119 @@ def login_submit(
 
 @router.post("/logout", include_in_schema=False)
 def logout(settings: Settings = Depends(get_settings)) -> RedirectResponse:
-    """Cierra sesion borrando la cookie. Acepta solo POST para evitar logouts
-    por enlace cruzado."""
+    """Cierra sesion borrando la cookie. Solo POST para evitar logouts por enlace
+    cruzado."""
     redirect = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     _clear_session_cookie(redirect, settings)
     return redirect
 
 
+# ---------------------------------------------------------------------------
+# Rutas protegidas (require_user_html)
+# ---------------------------------------------------------------------------
+
+
 @router.get("/tickets", include_in_schema=False)
-def tickets_placeholder(
+def tickets_list_view(
     request: Request,
-    user: User | None = Depends(current_user),
+    status_param: StatusFilter | None = Query(default=None, alias="status"),
+    category_param: CategoryFilter | None = Query(default=None, alias="category"),
+    needs_review: bool | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_user_html),
     settings: Settings = Depends(get_settings),
+    conn: sqlite3.Connection = Depends(get_db_connection),
 ) -> Response:
-    """Placeholder hasta el Paso 5b. Si no hay sesion, redirige a /login."""
-    if user is None:
-        return _redirect_unauthenticated(request, settings)
+    """Listado paginado con filtros. Sin ``status`` muestra solo los activos."""
+    # Mapeo URL -> servicio.
+    if status_param is None:
+        statuses_arg: list[TicketStatus] | None = list(_ACTIVE_STATUSES)
+        implicit_status_filter = True
+    elif status_param is StatusFilter.ALL:
+        statuses_arg = None
+        implicit_status_filter = False
+    else:
+        statuses_arg = [TicketStatus(status_param.value)]
+        implicit_status_filter = False
+
+    if category_param is CategoryFilter.UNCATEGORIZED:
+        only_uncategorized = True
+        category_arg: TicketCategory | None = None
+    elif category_param is not None:
+        only_uncategorized = False
+        category_arg = TicketCategory(category_param.value)
+    else:
+        only_uncategorized = False
+        category_arg = None
+
+    # Pedimos ``limit + 1`` para saber si hay siguiente sin un COUNT(*) extra.
+    rows = list_tickets(
+        conn,
+        statuses=statuses_arg,
+        category=category_arg,
+        only_uncategorized=only_uncategorized,
+        needs_review=needs_review,
+        limit=_PAGE_SIZE + 1,
+        offset=offset,
+    )
+    has_next = len(rows) > _PAGE_SIZE
+    tickets = rows[:_PAGE_SIZE]
+
+    next_offset = offset + _PAGE_SIZE if has_next else None
+    prev_offset = max(offset - _PAGE_SIZE, 0) if offset > 0 else None
+
     return _render_with_session(
-        template="tickets_placeholder.html",
+        template="tickets_list.html",
         request=request,
         user=user,
         settings=settings,
+        tickets=tickets,
+        # Filtros activos (lo que se ve seleccionado en el form).
+        status_value=status_param.value if status_param else "",
+        category_value=category_param.value if category_param else "",
+        needs_review_value=(
+            "" if needs_review is None else ("true" if needs_review else "false")
+        ),
+        implicit_status_filter=implicit_status_filter,
+        # Helpers para construir URLs de paginacion / banner.
+        url_show_all=_query_url(request, status="ALL", offset=None),
+        url_clear_filters=request.url.path,
+        url_next=(_query_url(request, offset=next_offset) if has_next else None),
+        url_prev=(
+            _query_url(request, offset=prev_offset if prev_offset else None)
+            if prev_offset is not None
+            else None
+        ),
+        page_size=_PAGE_SIZE,
+        offset=offset,
+    )
+
+
+# El formato de los IDs (``TLY-2026-0001``) lo controla el path: el
+# parametro de FastAPI es libre, pero lo validamos con la misma regex
+# que usa ``ticket_service`` para no malgastar query si la URL viene rota.
+from app.services.ticket_service import _ID_RE  # noqa: E402
+
+
+@router.get("/tickets/{ticket_id}", include_in_schema=False)
+def ticket_detail_view(
+    ticket_id: str,
+    request: Request,
+    user: User = Depends(require_user_html),
+    settings: Settings = Depends(get_settings),
+    conn: sqlite3.Connection = Depends(get_db_connection),
+) -> Response:
+    """Vista detalle. 404 si el formato no encaja o si no existe en BD."""
+    if not _ID_RE.match(ticket_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    ticket = get_ticket(conn, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return _render_with_session(
+        template="ticket_detail.html",
+        request=request,
+        user=user,
+        settings=settings,
+        ticket=ticket,
     )
