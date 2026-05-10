@@ -112,6 +112,40 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 - [x] Paso 4 — Configuracion centralizada (`app.config`) y servicio de tickets (`app.services.ticket_service`).
 - [x] Paso 5a — Auth (bcrypt + cookie firmada con `itsdangerous`), login/logout, rate limit.
 - [x] Paso 5b — Listado y detalle de tickets (read-only) con filtros, paginacion y datos demo.
+- [x] Paso 6 — Clasificador con Anthropic API (Claude Haiku 4.5), tool use forzado y defensa contra prompt injection.
+
+---
+
+## Clasificador (Paso 6)
+
+`app.services.classifier.classify(subject, body)` clasifica un mensaje en
+`ADMINISTRATIVO`, `COMERCIAL` o `SOPORTE`. Sincrono. Si la IA falla por
+cualquier motivo (timeout, red, parseo, categoria invalida) devuelve un
+resultado vacio; nunca lanza. La integracion con el ticket lo hace el
+poller del Paso 7 — el clasificador no toca la BD.
+
+Para probar con un texto concreto contra la API real:
+
+```powershell
+python scripts/classify_text.py --subject "El telefono no da tono" --text "..."
+echo "Buenos dias, querria un presupuesto de un router 4G" `
+    | python scripts/classify_text.py --subject "Presupuesto"
+```
+
+## Tests
+
+Suite por defecto (mockeada, sin red, sin coste):
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Smoke contra la **API real** de Anthropic (excluido por defecto, requiere
+`ANTHROPIC_API_KEY` valida; coste por ejecucion < 0.001 EUR):
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m real_api
+```
 
 ---
 

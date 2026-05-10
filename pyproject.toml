@@ -73,3 +73,10 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Por defecto excluimos los tests marcados ``real_api`` (tiran contra la API
+# real de Anthropic, cuestan dinero y son lentos). Para ejecutarlos
+# manualmente: ``pytest -m real_api``.
+addopts = "-m 'not real_api'"
+markers = [
+    "real_api: tests que tiran contra la API real de Anthropic (cuestan dinero, lentos)",
+]
