@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Iniciar sesion · Telycoposio Tickets{% endblock %}
+{% block layout %}
+<main class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow p-8 border border-slate-200">
+        <h1 class="text-xl font-semibold mb-1">Telycoposio Tickets</h1>
+        <p class="text-sm text-slate-500 mb-6">Acceso interno</p>
+
+        {% if error %}
+        <div class="mb-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm px-3 py-2">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="post" action="/login" class="space-y-4">
+            <div>
+                <label for="username" class="block text-sm font-medium text-slate-700 mb-1">Usuario</label>
+                <input
+                    id="username" name="username" type="text" required autofocus autocomplete="username"
+                    value="{{ username|e }}"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400">
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-slate-700 mb-1">Contrasena</label>
+                <input
+                    id="password" name="password" type="password" required autocomplete="current-password"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-400">
+            </div>
+            <button
+                type="submit"
+                class="w-full rounded-lg bg-slate-900 text-white px-3 py-2 font-medium hover:bg-slate-800 transition">
+                Entrar
+            </button>
+        </form>
+    </div>
+</main>
+{% endblock %}

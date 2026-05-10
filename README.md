@@ -7,7 +7,7 @@ Fase 3) en un unico sistema de tickets numerados y categorizados automaticamente
 con IA (Claude Haiku).
 
 > Para el detalle funcional, modelo de datos y plan de fases, ver [`SPEC.md`](./SPEC.md).
-> Version actual del SPEC: **v1.1**.
+> Version actual del SPEC: **v1.2**.
 
 ---
 
@@ -27,7 +27,7 @@ con IA (Claude Haiku).
 ```
 telycoposio-tickets/
 ├── README.md                 Este archivo
-├── SPEC.md                   Especificacion funcional y tecnica (v1.1)
+├── SPEC.md                   Especificacion funcional y tecnica (v1.2)
 ├── CHECKLIST_PREVIO.md       Pasos previos antes de empezar a codificar
 ├── PROMPT_BASE.md            Prompt base para sesiones con Claude Code
 ├── .env.example              Plantilla de variables de entorno
@@ -103,7 +103,8 @@ El contenedor expone el puerto 8000 y monta `./data` (SQLite) y `./secrets`
 - [x] Paso 2 — Dockerfile, docker-compose.yml y endpoint `/health`.
 - [x] Paso 3 — Modelo de datos, SQLite y scripts de inicializacion (SPEC v1.2).
 - [x] Paso 4 — Configuracion centralizada (`app.config`) y servicio de tickets (`app.services.ticket_service`).
-- [ ] Paso 5 — (pendiente).
+- [x] Paso 5a — Auth (bcrypt + cookie firmada con `itsdangerous`), login/logout, rate limit.
+- [ ] Paso 5b — Listado y detalle de tickets (read-only).
 
 ---
 

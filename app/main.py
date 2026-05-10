@@ -1,11 +1,15 @@
 """Punto de entrada de la aplicacion FastAPI.
 
-En el Paso 2 solo se expone un endpoint `/health` para que Docker pueda
-verificar el estado del contenedor. El resto de funcionalidad (rutas web,
-worker de Gmail, etc.) se anadira en pasos posteriores.
+Expone:
+
+- ``/health`` para el HEALTHCHECK del contenedor (Paso 2).
+- Las rutas web (``/``, ``/login``, ``/logout``, ``/tickets``) montadas desde
+  ``app.web.routes`` (Paso 5a; el listado real llega en 5b).
 """
 
 from fastapi import FastAPI
+
+from app.web.routes import router as web_router
 
 app = FastAPI(
     title="Telycoposio Tickets",
@@ -18,3 +22,6 @@ app = FastAPI(
 def health() -> dict[str, str]:
     """Healthcheck minimo. Lo usa el HEALTHCHECK del contenedor."""
     return {"status": "ok"}
+
+
+app.include_router(web_router)
