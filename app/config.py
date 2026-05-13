@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from functools import lru_cache
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     TICKET_PREFIX: str = "TLY"
     SQLITE_PATH: str = "data/app.db"
+    # URL base de la aplicacion. Se usa en las notificaciones internas para
+    # construir enlaces clickables al detalle de cada ticket. Default valido
+    # para desarrollo local; en produccion se override en ``.env``.
+    APP_BASE_URL: str = "http://localhost:8000"
+
+    # Flag que activa el worker de polling de email (Paso 8). Por defecto
+    # esta **desactivado** para que los tests y los arranques manuales en
+    # dev no toquen la cuenta de Gmail real sin querer. Hay que ponerlo a
+    # ``true`` explicitamente en ``.env`` para encenderlo.
+    WORKER_ENABLED: bool = False
 
     # =====================================================================
     # Anthropic
@@ -74,6 +84,20 @@ class Settings(BaseSettings):
     # =====================================================================
     GSHEETS_SPREADSHEET_ID: str | None = None
     GSHEETS_CREDENTIALS_PATH: str | None = None
+
+    # ---------------------------------------------------------------------
+    # Validators
+    # ---------------------------------------------------------------------
+
+    @field_validator("APP_BASE_URL")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        """Quita ``/`` final para evitar URLs con doble slash.
+
+        Si alguien pone ``http://localhost:8000/`` en ``.env``, sin esto
+        terminariamos generando enlaces tipo ``http://localhost:8000//tickets/...``.
+        """
+        return v.rstrip("/")
 
 
 _SECRET_KEY_HINT = (

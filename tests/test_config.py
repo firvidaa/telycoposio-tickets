@@ -65,6 +65,33 @@ def test_opcionales_sin_default_son_none() -> None:
     assert s.GSHEETS_CREDENTIALS_PATH is None
 
 
+def test_worker_enabled_default_false() -> None:
+    """Por defecto el worker esta apagado: no debe arrancarse sin querer."""
+    s = Settings(_env_file=None)
+    assert s.WORKER_ENABLED is False
+
+
+def test_app_base_url_default() -> None:
+    s = Settings(_env_file=None)
+    assert s.APP_BASE_URL == "http://localhost:8000"
+
+
+def test_app_base_url_strip_trailing_slash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Si .env tiene 'http://x/' lo normalizamos a 'http://x' para que las
+    URLs de notificacion interna no salgan con doble slash."""
+    monkeypatch.setenv("APP_BASE_URL", "https://tickets.empresa.es/")
+    s = Settings(_env_file=None)
+    assert s.APP_BASE_URL == "https://tickets.empresa.es"
+
+
+def test_app_base_url_strip_multiple_trailing_slashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_BASE_URL", "https://x.example.com///")
+    s = Settings(_env_file=None)
+    assert s.APP_BASE_URL == "https://x.example.com"
+
+
 def test_overrides_desde_entorno(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_PORT", "9999")
     monkeypatch.setenv("TICKET_PREFIX", "TLC")

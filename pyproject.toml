@@ -25,6 +25,10 @@ dependencies = [
     # Anthropic
     "anthropic>=0.39.0",
 
+    # Scheduler in-process para el worker de polling (Paso 8). AsyncIOScheduler
+    # se arranca desde el lifespan de FastAPI; no requiere proceso separado.
+    "apscheduler>=3.10.0",
+
     # Google APIs (Gmail + Sheets)
     "google-api-python-client>=2.149.0",
     "google-auth>=2.35.0",
