@@ -169,6 +169,69 @@ def test_falla_si_falta_email_app_password(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 # ---------------------------------------------------------------------------
+# Validador de Google Sheets (Paso 9)
+# ---------------------------------------------------------------------------
+
+
+def test_gsheets_enabled_false_no_exige_id_ni_credenciales() -> None:
+    """Default: si GSHEETS_ENABLED=false, ID y credentials pueden faltar."""
+    s = Settings(_env_file=None)
+    assert s.GSHEETS_ENABLED is False
+    assert s.GSHEETS_SPREADSHEET_ID is None
+    assert s.GSHEETS_CREDENTIALS_PATH is None
+
+
+def test_gsheets_enabled_true_con_ambos_setados_carga_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GSHEETS_ENABLED", "true")
+    monkeypatch.setenv("GSHEETS_SPREADSHEET_ID", "abc123")
+    monkeypatch.setenv("GSHEETS_CREDENTIALS_PATH", "./secrets/sa.json")
+    s = Settings(_env_file=None)
+    assert s.GSHEETS_ENABLED is True
+    assert s.GSHEETS_SPREADSHEET_ID == "abc123"
+    assert s.GSHEETS_CREDENTIALS_PATH == "./secrets/sa.json"
+
+
+def test_gsheets_enabled_true_sin_spreadsheet_id_falla(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GSHEETS_ENABLED", "true")
+    monkeypatch.setenv("GSHEETS_CREDENTIALS_PATH", "./secrets/sa.json")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    # El mensaje debe nombrar la variable que falta y dar la salida.
+    msg = str(excinfo.value)
+    assert "GSHEETS_SPREADSHEET_ID" in msg
+    assert "GSHEETS_ENABLED=false" in msg
+
+
+def test_gsheets_enabled_true_sin_credentials_path_falla(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GSHEETS_ENABLED", "true")
+    monkeypatch.setenv("GSHEETS_SPREADSHEET_ID", "abc123")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    msg = str(excinfo.value)
+    assert "GSHEETS_CREDENTIALS_PATH" in msg
+
+
+def test_gsheets_enabled_true_sin_ninguna_nombra_ambas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Si faltan las dos, el mensaje debe listar ambas para evitar dos
+    arranques fallidos seguidos (arregla una, descubre que falta la otra).
+    """
+    monkeypatch.setenv("GSHEETS_ENABLED", "true")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    msg = str(excinfo.value)
+    assert "GSHEETS_SPREADSHEET_ID" in msg
+    assert "GSHEETS_CREDENTIALS_PATH" in msg
+
+
+# ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
 

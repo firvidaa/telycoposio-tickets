@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from functools import lru_cache
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -80,10 +80,18 @@ class Settings(BaseSettings):
     INTERNAL_NOTIFICATION_EMAIL: str | None = None
 
     # =====================================================================
-    # Google Sheets (opcional hasta que se integre la sincronizacion)
+    # Google Sheets (Paso 9)
     # =====================================================================
+    # Flag de activacion paralelo a WORKER_ENABLED: por defecto **off** para
+    # que tests y `uvicorn --reload` no toquen Sheets sin querer. Hay que
+    # ponerlo a ``true`` explicitamente en ``.env`` para encender el job.
+    GSHEETS_ENABLED: bool = False
     GSHEETS_SPREADSHEET_ID: str | None = None
     GSHEETS_CREDENTIALS_PATH: str | None = None
+    GSHEETS_WORKSHEET_NAME: str = "Tickets"
+    # 5 minutos. Para 200 tickets/mes (~7/dia) es de sobra; ciclos mas
+    # frecuentes solo gastan cuota API sin ganar nada.
+    GSHEETS_SYNC_INTERVAL_SECONDS: int = 300
 
     # ---------------------------------------------------------------------
     # Validators
@@ -98,6 +106,29 @@ class Settings(BaseSettings):
         terminariamos generando enlaces tipo ``http://localhost:8000//tickets/...``.
         """
         return v.rstrip("/")
+
+    @model_validator(mode="after")
+    def _check_gsheets_consistency(self) -> Settings:
+        """Si ``GSHEETS_ENABLED=true``, exigir ID y credenciales.
+
+        Fallar al cargar la config evita un arranque "exitoso" cuya
+        primera iteracion del job revienta con un mensaje feo de gspread.
+        Mensaje accionable: indica exactamente que falta.
+        """
+        if not self.GSHEETS_ENABLED:
+            return self
+        faltan: list[str] = []
+        if not self.GSHEETS_SPREADSHEET_ID:
+            faltan.append("GSHEETS_SPREADSHEET_ID")
+        if not self.GSHEETS_CREDENTIALS_PATH:
+            faltan.append("GSHEETS_CREDENTIALS_PATH")
+        if faltan:
+            raise ValueError(
+                "GSHEETS_ENABLED=true requiere "
+                + " y ".join(faltan)
+                + ". Anyadelas a .env o pon GSHEETS_ENABLED=false."
+            )
+        return self
 
 
 _SECRET_KEY_HINT = (
