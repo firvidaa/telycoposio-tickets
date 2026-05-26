@@ -92,15 +92,18 @@ def _ticket(
     confidence: float | None = 0.9,
     minute_offset: int = 0,
     attachments: list[Attachment] | None = None,
+    raw_message_id: str | None = None,
+    from_email: str | None = None,
+    channel: TicketChannel = TicketChannel.EMAIL,
 ) -> Ticket:
     base = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
     created = base + timedelta(minutes=minute_offset)
     return Ticket(
         id=f"TLY-2026-{n:04d}",
         created_at=created,
-        channel=TicketChannel.EMAIL,
+        channel=channel,
         from_name=f"Cliente {n}",
-        from_email=f"cliente{n}@example.com",
+        from_email=from_email if from_email is not None else f"cliente{n}@example.com",
         subject=f"Asunto numero {n}",
         body=f"Cuerpo del ticket {n}\nLinea 2.",
         status=status,
@@ -108,6 +111,7 @@ def _ticket(
         category_confidence=confidence,
         category_reasoning=None if category is None else "razon",
         needs_review=needs_review,
+        raw_message_id=raw_message_id,
         last_updated_at=created,
         attachments=attachments or [],
     )
@@ -515,3 +519,285 @@ def test_422_cliente_api_recibe_json(client: TestClient) -> None:
     # FastAPI emite una lista de errores estructurados (igual que el handler default).
     assert isinstance(body["detail"], list)
     assert any("status" in str(err.get("loc", [])) for err in body["detail"])
+
+
+# ---------------------------------------------------------------------------
+# POST /tickets/{id}/reply (Paso 10)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSender:
+    """Doble del EmailSender para tests de ruta. Programable por test."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.message_id = "<reply-from-test@x>"
+        self.error: Exception | None = None
+
+    def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        in_reply_to: str | None = None,
+    ) -> str:
+        self.calls.append(
+            {"to": to, "subject": subject, "body": body, "in_reply_to": in_reply_to}
+        )
+        if self.error is not None:
+            raise self.error
+        return self.message_id
+
+
+@pytest.fixture
+def fake_sender(client: TestClient) -> Iterator[_FakeSender]:
+    """Sobrescribe ``get_email_sender`` con un doble. Devuelve el doble."""
+    from app.web.routes import get_email_sender
+
+    sender = _FakeSender()
+    app.dependency_overrides[get_email_sender] = lambda: sender
+    try:
+        yield sender
+    finally:
+        # Quitar solo este override; los demas los limpia la fixture client.
+        app.dependency_overrides.pop(get_email_sender, None)
+
+
+def _count_replies(db_path: Path, ticket_id: str) -> int:
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM ticket_replies WHERE ticket_id = ?",
+            (ticket_id,),
+        ).fetchone()
+    return int(row["n"])
+
+
+def test_reply_sin_sesion_redirige_a_login(anon_client: TestClient) -> None:
+    r = anon_client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "x", "new_status": "WAITING"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_reply_caso_feliz_303_persiste_y_envia(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(
+        db_path,
+        _ticket(1, raw_message_id="<original@cli>"),
+    )
+
+    r = client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Hola, te respondemos.", "new_status": "WAITING"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/tickets/TLY-2026-0001"
+    # SMTP invocado con los args correctos.
+    assert len(fake_sender.calls) == 1
+    call = fake_sender.calls[0]
+    assert call["to"] == "cliente1@example.com"
+    assert call["subject"] == "Re: Asunto numero 1"
+    assert call["in_reply_to"] == "<original@cli>"
+    # Reply persistida.
+    assert _count_replies(db_path, "TLY-2026-0001") == 1
+
+
+def test_reply_cambia_estado_si_se_pide(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(
+        db_path,
+        _ticket(1, status=TicketStatus.NEW, raw_message_id="<o@c>"),
+    )
+
+    client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "x", "new_status": "CLOSED"},
+        follow_redirects=False,
+    )
+
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM tickets WHERE id = 'TLY-2026-0001'"
+        ).fetchone()
+    assert row["status"] == "CLOSED"
+
+
+def test_reply_no_change_deja_status_intacto(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(
+        db_path,
+        _ticket(1, status=TicketStatus.IN_PROGRESS, raw_message_id="<o@c>"),
+    )
+
+    client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "x", "new_status": "NO_CHANGE"},
+        follow_redirects=False,
+    )
+
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM tickets WHERE id = 'TLY-2026-0001'"
+        ).fetchone()
+    assert row["status"] == "IN_PROGRESS"
+
+
+def test_reply_body_vacio_400_no_persiste_ni_envia(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(db_path, _ticket(1, raw_message_id="<o@c>"))
+
+    r = client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "   \n  ", "new_status": "WAITING"},
+    )
+
+    assert r.status_code == 400
+    # El mensaje de error del servicio aparece en la pagina.
+    assert "body vacio" in r.text
+    assert fake_sender.calls == []
+    assert _count_replies(db_path, "TLY-2026-0001") == 0
+
+
+def test_reply_ticket_sin_raw_message_id_400(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    # Demo ticket: sin raw_message_id.
+    _insert_ticket(db_path, _ticket(1, raw_message_id=None))
+
+    r = client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Hola", "new_status": "WAITING"},
+    )
+
+    assert r.status_code == 400
+    assert "raw_message_id" in r.text
+    assert fake_sender.calls == []
+    assert _count_replies(db_path, "TLY-2026-0001") == 0
+
+
+def test_reply_status_invalido_400(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(db_path, _ticket(1, raw_message_id="<o@c>"))
+
+    r = client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Hola", "new_status": "INVENTADO"},
+    )
+
+    assert r.status_code == 400
+    assert "status invalido" in r.text
+    assert fake_sender.calls == []
+    assert _count_replies(db_path, "TLY-2026-0001") == 0
+
+
+def test_reply_ticket_inexistente_404(
+    client: TestClient, fake_sender: _FakeSender
+) -> None:
+    r = client.post(
+        "/tickets/TLY-2099-0001/reply",
+        data={"body": "Hola", "new_status": "WAITING"},
+    )
+    assert r.status_code == 404
+
+
+def test_reply_smtp_falla_502_no_persiste(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    _insert_ticket(db_path, _ticket(1, raw_message_id="<o@c>"))
+    fake_sender.error = RuntimeError("smtp caido")
+
+    r = client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Hola", "new_status": "WAITING"},
+    )
+
+    assert r.status_code == 502
+    assert "No se pudo enviar" in r.text
+    assert _count_replies(db_path, "TLY-2026-0001") == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /tickets/{id} con historial y form (Paso 10)
+# ---------------------------------------------------------------------------
+
+
+def test_detalle_muestra_form_de_respuesta_si_es_respondible(
+    client: TestClient, db_path: Path
+) -> None:
+    _insert_ticket(db_path, _ticket(1, raw_message_id="<o@c>"))
+    r = client.get("/tickets/TLY-2026-0001")
+    assert r.status_code == 200
+    assert "Responder al cliente" in r.text
+    # textarea del form presente.
+    assert 'name="body"' in r.text
+    # Subject preview incluye Re:.
+    assert "Re: Asunto numero 1" in r.text
+
+
+def test_detalle_oculta_form_si_ticket_sin_raw_message_id(
+    client: TestClient, db_path: Path
+) -> None:
+    """Ticket demo o creado a mano: el form se oculta y se muestra el motivo."""
+    _insert_ticket(db_path, _ticket(1, raw_message_id=None))
+    r = client.get("/tickets/TLY-2026-0001")
+    assert r.status_code == 200
+    assert "no es respondible" in r.text.lower()
+    # No hay form ni textarea de respuesta.
+    assert 'name="body"' not in r.text
+
+
+def test_detalle_oculta_form_si_canal_no_email(
+    client: TestClient, db_path: Path
+) -> None:
+    _insert_ticket(
+        db_path,
+        _ticket(
+            1,
+            channel=TicketChannel.WHATSAPP,
+            from_email=None,
+            raw_message_id=None,
+        ),
+    )
+    r = client.get("/tickets/TLY-2026-0001")
+    assert r.status_code == 200
+    assert "no es respondible" in r.text.lower()
+    assert "whatsapp" in r.text.lower()
+
+
+def test_detalle_muestra_historial_de_respuestas(
+    client: TestClient, fake_sender: _FakeSender, db_path: Path
+) -> None:
+    """Tras enviar dos respuestas el GET debe renderizarlas en orden ASC."""
+    _insert_ticket(db_path, _ticket(1, raw_message_id="<o@c>"))
+
+    fake_sender.message_id = "<reply-1@x>"
+    client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Primera.", "new_status": "WAITING"},
+        follow_redirects=False,
+    )
+    fake_sender.message_id = "<reply-2@x>"
+    client.post(
+        "/tickets/TLY-2026-0001/reply",
+        data={"body": "Segunda.", "new_status": "NO_CHANGE"},
+        follow_redirects=False,
+    )
+
+    r = client.get("/tickets/TLY-2026-0001")
+    assert r.status_code == 200
+    assert "Historial de respuestas (2)" in r.text
+    # Aparecen ambas, y la primera aparece antes que la segunda en el HTML.
+    assert "Primera." in r.text
+    assert "Segunda." in r.text
+    assert r.text.index("Primera.") < r.text.index("Segunda.")

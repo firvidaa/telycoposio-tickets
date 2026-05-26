@@ -51,7 +51,9 @@ from app.services.auth import (
     verify_password,
     verify_session_token,
 )
-from app.services.ticket_service import get_ticket, list_tickets
+from app.services.email_client import EmailClient
+from app.services.reply_service import EmailSender, send_reply
+from app.services.ticket_service import get_replies, get_ticket, list_tickets
 
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,13 @@ def get_db_connection(
     """Abre una conexion SQLite por request y la cierra al terminar."""
     with get_connection(settings.SQLITE_PATH) as conn:
         yield conn
+
+
+def get_email_sender(settings: Settings = Depends(get_settings)) -> EmailSender:
+    """Construye el cliente SMTP. ``EmailClient`` es lazy: no abre red
+    en el constructor. Los tests sobreescriben esta dependency.
+    """
+    return EmailClient(settings=settings)
 
 
 def current_user(
@@ -588,6 +597,56 @@ def tickets_list_view(
 from app.services.ticket_service import _ID_RE  # noqa: E402
 
 
+def _can_reply(ticket: Any) -> bool:
+    """Indica si el ticket es respondible (canal email + email + msg_id).
+
+    El template lo usa para deshabilitar el form en tickets demo o de
+    otros canales. El handler POST tambien lo valida defensivamente.
+    """
+    return (
+        ticket.channel.value == "email"
+        and bool(ticket.from_email)
+        and bool(ticket.raw_message_id)
+    )
+
+
+def _render_ticket_detail(
+    *,
+    request: Request,
+    user: User,
+    settings: Settings,
+    conn: sqlite3.Connection,
+    ticket_id: str,
+    reply_error: str | None = None,
+    reply_body: str = "",
+    status_code: int = 200,
+) -> Response:
+    """Renderiza el detalle con ticket + historial. 404 si no existe.
+
+    Usado por el ``GET`` y por el ``POST`` cuando hay que re-renderizar
+    tras un error de validacion (conserva el body que escribio el
+    operador para que no lo pierda).
+    """
+    if not _ID_RE.match(ticket_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    ticket = get_ticket(conn, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    replies = get_replies(conn, ticket_id)
+    return _render_with_session(
+        template="ticket_detail.html",
+        request=request,
+        user=user,
+        settings=settings,
+        status_code=status_code,
+        ticket=ticket,
+        replies=replies,
+        can_reply=_can_reply(ticket),
+        reply_error=reply_error,
+        reply_body=reply_body,
+    )
+
+
 @router.get("/tickets/{ticket_id}", include_in_schema=False)
 def ticket_detail_view(
     ticket_id: str,
@@ -597,16 +656,118 @@ def ticket_detail_view(
     conn: sqlite3.Connection = Depends(get_db_connection),
 ) -> Response:
     """Vista detalle. 404 si el formato no encaja o si no existe en BD."""
+    return _render_ticket_detail(
+        request=request,
+        user=user,
+        settings=settings,
+        conn=conn,
+        ticket_id=ticket_id,
+    )
+
+
+def _parse_new_status(value: str) -> TicketStatus | None:
+    """Convierte el campo del form a ``TicketStatus | None``.
+
+    Cadena vacia o ``"NO_CHANGE"`` -> ``None``. Cualquier otro valor se
+    intenta como ``TicketStatus``; si no encaja -> ``ValueError``.
+    """
+    if not value or value == "NO_CHANGE":
+        return None
+    try:
+        return TicketStatus(value)
+    except ValueError as exc:
+        raise ValueError(f"status invalido: {value!r}") from exc
+
+
+@router.post("/tickets/{ticket_id}/reply", include_in_schema=False)
+def ticket_reply_submit(
+    ticket_id: str,
+    request: Request,
+    body: str = Form(...),
+    new_status: str = Form(""),
+    user: User = Depends(require_user_html),
+    settings: Settings = Depends(get_settings),
+    conn: sqlite3.Connection = Depends(get_db_connection),
+    email_client: EmailSender = Depends(get_email_sender),
+) -> Response:
+    """Envia una respuesta al cliente. PRG en exito, re-render en error.
+
+    - Validacion fallida (body vacio, ticket no respondible, status raro)
+      -> 200 + re-render con ``reply_error`` y el body conservado.
+    - Envio SMTP fallido -> 200 + re-render con mensaje generico (el
+      operador puede reintentar).
+    - Exito -> 303 a ``GET /tickets/{id}`` con la cookie de sesion
+      renovada (PRG).
+    """
     if not _ID_RE.match(ticket_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     ticket = get_ticket(conn, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    return _render_with_session(
-        template="ticket_detail.html",
-        request=request,
-        user=user,
-        settings=settings,
-        ticket=ticket,
+    # Validacion del campo status antes de tocar SMTP.
+    try:
+        parsed_status = _parse_new_status(new_status)
+    except ValueError as exc:
+        return _render_ticket_detail(
+            request=request,
+            user=user,
+            settings=settings,
+            conn=conn,
+            ticket_id=ticket_id,
+            reply_error=str(exc),
+            reply_body=body,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        send_reply(
+            conn=conn,
+            email_client=email_client,
+            ticket=ticket,
+            body=body,
+            user=user,
+            new_status=parsed_status,
+        )
+    except ValueError as exc:
+        # Body vacio, ticket no respondible, etc. Mensaje del servicio
+        # ya es legible para el operador.
+        return _render_ticket_detail(
+            request=request,
+            user=user,
+            settings=settings,
+            conn=conn,
+            ticket_id=ticket_id,
+            reply_error=str(exc),
+            reply_body=body,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:  # noqa: BLE001 — defensa: SMTP, red, lo que sea
+        logger.exception(
+            "ticket_reply_submit fallo ticket=%s reason=%s",
+            ticket_id,
+            type(exc).__name__,
+        )
+        return _render_ticket_detail(
+            request=request,
+            user=user,
+            settings=settings,
+            conn=conn,
+            ticket_id=ticket_id,
+            reply_error=(
+                "No se pudo enviar el email. Revisa la conexion SMTP y "
+                "reintenta. Si el problema persiste, mira los logs."
+            ),
+            reply_body=body,
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    # Exito: PRG. Redirigimos al GET para que el operador vea la respuesta
+    # en el historial sin riesgo de re-submit por refresh.
+    redirect = RedirectResponse(
+        url=f"/tickets/{ticket_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
+    assert user.id is not None
+    _set_session_cookie(redirect, user.id, settings)
+    return redirect

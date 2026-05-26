@@ -63,6 +63,30 @@ CREATE INDEX IF NOT EXISTS idx_tickets_pending_sync
     WHERE synced_to_sheets_at IS NULL;
 
 -- ---------------------------------------------------------------------
+-- ticket_replies (Paso 10)
+-- ---------------------------------------------------------------------
+-- Historial de respuestas enviadas al cliente desde la web. Inmutables:
+-- una vez enviada (SMTP OK + INSERT), no se edita ni se borra.
+--
+-- FK a tickets.id con ON DELETE CASCADE: si en el futuro borraramos un
+-- ticket (no es flujo MVP), las respuestas se van con el. user_id no se
+-- cascadea para no perder el rastro si se borra un usuario.
+CREATE TABLE IF NOT EXISTS ticket_replies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id   TEXT    NOT NULL
+        REFERENCES tickets(id) ON DELETE CASCADE,
+    sent_at     TEXT    NOT NULL,
+    user_id     INTEGER NOT NULL
+        REFERENCES users(id),
+    body        TEXT    NOT NULL,
+    message_id  TEXT    NOT NULL
+);
+
+-- Indice para listar respuestas de un ticket en orden cronologico.
+CREATE INDEX IF NOT EXISTS idx_ticket_replies_ticket_id
+    ON ticket_replies(ticket_id, sent_at);
+
+-- ---------------------------------------------------------------------
 -- users
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (

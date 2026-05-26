@@ -29,6 +29,7 @@ from typing import Final
 from zoneinfo import ZoneInfo
 
 from app.db.sqlite import transaction
+from app.models.reply import Reply, from_db_row as reply_from_db_row
 from app.models.ticket import (
     TICKET_COLUMNS,
     Attachment,
@@ -368,3 +369,23 @@ def count_tickets(
     )
     row = conn.execute(f"SELECT COUNT(*) AS n FROM tickets {where}", args).fetchone()
     return int(row["n"])
+
+
+# ---------------------------------------------------------------------------
+# Respuestas (Paso 10)
+# ---------------------------------------------------------------------------
+
+
+def get_replies(conn: sqlite3.Connection, ticket_id: str) -> list[Reply]:
+    """Lista las respuestas de un ticket en orden cronologico ASC.
+
+    No filtra si el ticket existe o no: devuelve lista vacia tanto si no
+    hay respuestas como si el ticket no existe. La ruta web ya valida la
+    existencia antes de invocar.
+    """
+    rows = conn.execute(
+        "SELECT * FROM ticket_replies WHERE ticket_id = ? "
+        "ORDER BY sent_at ASC, id ASC",
+        (ticket_id,),
+    ).fetchall()
+    return [reply_from_db_row(r) for r in rows]

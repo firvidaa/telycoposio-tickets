@@ -47,7 +47,46 @@ def test_init_schema_crea_tablas_esperadas(conn: sqlite3.Connection) -> None:
         "AND name NOT LIKE 'sqlite_%' ORDER BY name"
     ).fetchall()
     tables = [r["name"] for r in rows]
-    assert tables == ["tickets", "users"]
+    # ticket_replies (Paso 10) + tickets + users.
+    assert tables == ["ticket_replies", "tickets", "users"]
+
+
+def test_init_schema_crea_indice_ticket_replies(conn: sqlite3.Connection) -> None:
+    """El indice compuesto (ticket_id, sent_at) cubre la consulta del
+    historial: ``WHERE ticket_id = ? ORDER BY sent_at ASC``.
+    """
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND name = 'idx_ticket_replies_ticket_id'"
+    ).fetchone()
+    assert row is not None
+
+
+def test_ticket_replies_fk_cascade_borra_replies_con_ticket(
+    conn: sqlite3.Connection,
+) -> None:
+    """Borrar un ticket arrastra sus respuestas (ON DELETE CASCADE)."""
+    # Crear ticket y usuario minimos.
+    conn.execute(
+        "INSERT INTO tickets (id, created_at, channel, subject, body, "
+        "status, last_updated_at) VALUES "
+        "('TLY-2026-0001', '2026-05-30T09:00:00+00:00', 'email', 's', 'b', 'NEW', "
+        "'2026-05-30T09:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO users (username, password_hash, display_name, role, created_at) "
+        "VALUES ('u', 'h', 'U', 'user', '2026-01-01T00:00:00+00:00')"
+    )
+    user_id = conn.execute("SELECT id FROM users").fetchone()["id"]
+    conn.execute(
+        "INSERT INTO ticket_replies (ticket_id, sent_at, user_id, body, message_id) "
+        "VALUES ('TLY-2026-0001', '2026-05-30T10:00:00+00:00', ?, 'x', '<m@x>')",
+        (user_id,),
+    )
+    assert conn.execute("SELECT COUNT(*) AS n FROM ticket_replies").fetchone()["n"] == 1
+
+    conn.execute("DELETE FROM tickets WHERE id = 'TLY-2026-0001'")
+    assert conn.execute("SELECT COUNT(*) AS n FROM ticket_replies").fetchone()["n"] == 0
 
 
 def test_init_schema_es_idempotente(conn: sqlite3.Connection) -> None:

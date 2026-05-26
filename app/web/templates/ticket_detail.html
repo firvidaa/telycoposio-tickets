@@ -80,5 +80,72 @@
     </section>
     {% endif %}
 
+    {% if replies %}
+    <section class="mt-8">
+        <h3 class="text-sm font-medium text-slate-500 mb-3">Historial de respuestas ({{ replies | length }})</h3>
+        <ul class="space-y-3">
+            {% for r in replies %}
+            <li class="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                <div class="flex flex-wrap justify-between gap-x-4 text-xs text-slate-500">
+                    <span>{{ r.sent_at | madrid }}</span>
+                    <span class="font-mono">{{ r.message_id }}</span>
+                </div>
+                <pre class="mt-2 whitespace-pre-wrap break-words text-sm font-sans">{{ r.body }}</pre>
+            </li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+
+    <section class="mt-8">
+        <h3 class="text-sm font-medium text-slate-500 mb-3">Responder al cliente</h3>
+        {% if reply_error %}
+        <div class="mb-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm text-rose-800">
+            {{ reply_error }}
+        </div>
+        {% endif %}
+        {% if not can_reply %}
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            Este ticket no es respondible desde la web.
+            {% if ticket.channel.value != "email" %}
+            <span>(Canal: {{ ticket.channel.value }}.)</span>
+            {% elif not ticket.from_email %}
+            <span>(No hay direccion de email del remitente.)</span>
+            {% elif not ticket.raw_message_id %}
+            <span>(Falta el Message-Id del email original; probablemente es un ticket demo.)</span>
+            {% endif %}
+        </div>
+        {% else %}
+        <form action="/tickets/{{ ticket.id }}/reply" method="post" class="space-y-3">
+            <div>
+                <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="reply-body">Mensaje</label>
+                <textarea id="reply-body" name="body" rows="6" required
+                          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-sky-400"
+                          placeholder="Hola {{ ticket.from_name or '' }}, ...">{{ reply_body or "" }}</textarea>
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
+                <div>
+                    <label class="block text-xs uppercase tracking-wide text-slate-500 mb-1" for="reply-status">Cambiar estado a</label>
+                    <select id="reply-status" name="new_status"
+                            class="rounded-lg border border-slate-300 px-2 py-2 text-sm">
+                        <option value="WAITING" selected>En espera (default)</option>
+                        <option value="IN_PROGRESS">En curso</option>
+                        <option value="CLOSED">Cerrado</option>
+                        <option value="NO_CHANGE">No cambiar</option>
+                    </select>
+                </div>
+                <button type="submit"
+                        class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-400">
+                    Enviar respuesta
+                </button>
+                <p class="text-xs text-slate-500">
+                    Se enviara a <span class="font-mono">{{ ticket.from_email }}</span> con el asunto
+                    "Re: {{ ticket.subject }}".
+                </p>
+            </div>
+        </form>
+        {% endif %}
+    </section>
+
 </main>
 {% endblock %}
