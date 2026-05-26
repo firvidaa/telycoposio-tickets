@@ -167,3 +167,48 @@ docker compose logs -f     # ver logs en vivo
 ```
 
 Volumenes montados: `./data` (BD) y `./secrets` (credenciales).
+
+---
+
+## 9. Trampas conocidas (leer antes de tocar el worker)
+
+### 9.1. Bootstrap obligatorio antes de activar el poller por primera vez
+
+`WORKER_ENABLED=true` hace que el poller procese **cualquier email del
+INBOX sin keyword `TLY_PROCESSED`**, incluidos los historicos. Si la
+cuenta de soporte ya tiene emails viejos (notificaciones de Google,
+newsletters, smoke tests previos, etc.) el poller los convertira a
+tickets y les enviara la auto-respuesta — provocando bucles con
+auto-responders ajenos.
+
+**Antes** del primer arranque del worker en una cuenta IMAP:
+
+```powershell
+# Pone WORKER_ENABLED=false primero (red de seguridad)
+.\.venv\Scripts\python.exe scripts/email_smoke.py --mark-all-existing-processed --yes
+# Ahora ya puedes WORKER_ENABLED=true y arrancar uvicorn
+```
+
+Esto aplica `TLY_PROCESSED` a todos los UIDs actuales **sin crear
+tickets ni enviar emails**. A partir de ahi solo se procesara lo que
+entre nuevo.
+
+### 9.2. `seed_demo_tickets.py` usa IDs altos (9991..9997)
+
+Decision arrastrada del Paso 5b: los tickets demo se insertan en el
+rango alto del anyo (`TLY-2026-9991..9997`). Cuando el poller recibe el
+primer email real, le asigna `9998`, luego `9999`, y al siguiente
+intenta `10000` -> `TicketIdOverflowError` -> el ticket no se crea y
+el email queda "toxico" tras 5 reintentos.
+
+Mientras no se arregle, regla operativa:
+
+- **No correr `seed_demo` en una BD que vaya a recibir emails reales.**
+- Si quieres datos demo + flujo real, vaciar la tabla antes de pasar
+  a produccion:
+  ```powershell
+  .\.venv\Scripts\python.exe -c "import sqlite3; c = sqlite3.connect('data/app.db'); c.execute(\"DELETE FROM ticket_replies\"); c.execute(\"DELETE FROM tickets WHERE from_email = 'demo@ejemplo.com'\"); c.commit(); print('borrados:', c.total_changes)"
+  ```
+
+El arreglo definitivo (mover los demo a un namespace `DEMO-NNNN` o a
+IDs bajos con flag) queda apuntado como deuda tecnica.
