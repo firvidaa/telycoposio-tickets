@@ -32,6 +32,7 @@ import email.policy
 import email.utils
 import imaplib
 import logging
+import re
 import smtplib
 import ssl
 from collections.abc import Callable, Iterator
@@ -56,6 +57,49 @@ PROCESSED_KEYWORD: Final[str] = "TLY_PROCESSED"
 #: Timeout (segundos) para conexiones IMAP/SMTP. 30s da margen para picos
 #: de latencia sin colgar al worker indefinidamente.
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 30.0
+
+
+#: ``CRLF (o LF) seguido de WSP`` = continuacion de header (RFC 5322 §2.2.3).
+#: Al "unfold" volvemos a un solo espacio.
+_FOLD_RE: Final = re.compile(r"\r?\n[ \t]+")
+
+#: Cualquier CR/LF/TAB residual (no fold valido). Colapsamos a un espacio
+#: para no romper el header y, sobre todo, para evitar header injection.
+_CTRL_WS_RE: Final = re.compile(r"[\r\n\t]+")
+
+#: Colapso final de espacios consecutivos a uno (cosmetico). Tras las dos
+#: sustituciones anteriores puede quedar `"  "` en casos como
+#: ``"foo\\r\\n\\r\\n\\tbar"``; los emails no respetan espacios multiples
+#: al renderizar asi que mejor normalizarlo.
+_MULTI_SPACE_RE: Final = re.compile(r" {2,}")
+
+
+def _sanitize_header(value: str) -> str:
+    """Saneo de un valor de header para evitar ``ValueError`` y header injection.
+
+    El stdlib ``email.message.EmailMessage`` rechaza con ``ValueError``
+    cualquier valor de header que contenga CR/LF embebido. Lo vemos en
+    la practica con subjects de notificaciones (GitHub, etc.) que
+    incluyen folding ``\\r\\n<WSP>``. Sin saneo, el envio fallaba y
+    dejabamos al cliente sin la confirmacion.
+
+    Estrategia:
+
+    1. **Unfold RFC 5322**: ``\\r\\n`` (o ``\\n``) seguido de uno o mas
+       espacios/tabs -> un unico espacio. Asi ``"foo\\r\\n bar"`` queda
+       ``"foo bar"`` (un solo espacio), no ``"foo  bar"``.
+    2. **Restos sin fold valido**: cualquier CR/LF/TAB residual -> un
+       espacio. Defensa contra header injection (un atacante meteria
+       ``\\r\\nBcc: ...``).
+    3. Colapso de espacios multiples en uno (cosmetico).
+    4. Trim de extremos.
+    """
+    if not value:
+        return value
+    out = _FOLD_RE.sub(" ", value)
+    out = _CTRL_WS_RE.sub(" ", out)
+    out = _MULTI_SPACE_RE.sub(" ", out)
+    return out.strip()
 
 
 BodySource = Literal["text/plain", "html_converted", "empty"]
@@ -239,10 +283,15 @@ class EmailClient:
         body: str,
         in_reply_to: str | None,
     ) -> email.message.EmailMessage:
+        # Saneo defensivo de los headers de texto libre. El subject puede
+        # llegar con CR/LF embebido desde notificaciones automaticas
+        # (GitHub, etc.); ``to`` ya viene parseado pero saneamos por
+        # defensa en profundidad. ``body`` NO se sanea: pertenece al
+        # payload, no a un header.
         msg = email.message.EmailMessage()
         msg["From"] = self._settings.EMAIL_ADDRESS
-        msg["To"] = to
-        msg["Subject"] = subject
+        msg["To"] = _sanitize_header(to)
+        msg["Subject"] = _sanitize_header(subject)
         msg["Date"] = email.utils.formatdate(localtime=False)
         domain = (
             self._settings.EMAIL_ADDRESS.rsplit("@", 1)[1]

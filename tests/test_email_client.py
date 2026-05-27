@@ -478,3 +478,92 @@ def test_send_devuelve_message_id_generado() -> None:
     msg_id = client.send(to="x@example.com", subject="s", body="b")
     assert msg_id.startswith("<") and msg_id.endswith(">")
     assert "example.com" in msg_id  # deriva del dominio del From
+
+
+# ---------------------------------------------------------------------------
+# Saneo de headers (defensa contra CR/LF embebido)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_header_colapsa_crlf_en_espacio() -> None:
+    """``_sanitize_header`` aplana CR/LF y combinaciones en un solo espacio."""
+    from app.services.email_client import _sanitize_header
+
+    # CRLF tipico (folding de subject en MIME) sin WSP siguiente.
+    assert _sanitize_header("foo\r\nbar") == "foo bar"
+    # Multiple CR/LF/TAB residuales se colapsan en un solo espacio.
+    assert _sanitize_header("foo\r\n\r\n\tbar") == "foo bar"
+    # CR solo, LF solo.
+    assert _sanitize_header("foo\rbar") == "foo bar"
+    assert _sanitize_header("foo\nbar") == "foo bar"
+
+
+def test_sanitize_header_unfold_rfc5322_no_dobla_espacios() -> None:
+    """``\\r\\n`` + WSP es continuacion de header (RFC 5322); el unfold
+    debe dejar UN solo espacio, no dos. Caso real: el subject de
+    notificaciones de GitHub viene foldeado.
+    """
+    from app.services.email_client import _sanitize_header
+
+    assert _sanitize_header("foo\r\n bar") == "foo bar"
+    assert _sanitize_header("foo\n\tbar") == "foo bar"
+    assert _sanitize_header("foo\r\n   bar") == "foo bar"
+
+
+def test_sanitize_header_trim_extremos() -> None:
+    from app.services.email_client import _sanitize_header
+
+    assert _sanitize_header("  hola  ") == "hola"
+    assert _sanitize_header("\r\nhola\r\n") == "hola"
+
+
+def test_sanitize_header_no_modifica_texto_normal() -> None:
+    from app.services.email_client import _sanitize_header
+
+    assert _sanitize_header("Asunto normal") == "Asunto normal"
+    assert _sanitize_header("Re: [TICKET-123] Hola") == "Re: [TICKET-123] Hola"
+
+
+def test_sanitize_header_vacio_pasa_tal_cual() -> None:
+    from app.services.email_client import _sanitize_header
+
+    assert _sanitize_header("") == ""
+
+
+def test_send_con_subject_que_contiene_crlf_no_lanza_y_se_sanea() -> None:
+    """Regresion: GitHub manda subjects con ``\\r\\n`` embebido y antes
+    del fix el EmailMessage lanzaba ``ValueError`` al asignar el header.
+    Ahora el subject se sanea y el envio prospera.
+    """
+    client, _, fake_smtp = _make_client()
+    client.send(
+        to="cliente@example.com",
+        subject="[GitHub] OAuth added to your\r\n account",
+        body="Confirmacion",
+    )
+    sent = fake_smtp.sent[0]
+    # CRLF eliminado, queda una sola linea.
+    assert sent["Subject"] == "[GitHub] OAuth added to your account"
+    assert "\r" not in sent["Subject"]
+    assert "\n" not in sent["Subject"]
+
+
+def test_send_con_to_que_contiene_crlf_no_inyecta_bcc() -> None:
+    """Defensa en profundidad: aunque ``to`` viene parseado de
+    ``IncomingEmail``, saneamos por si en el futuro entra desde otro
+    origen. La propiedad que importa: no se inyecta ningun header
+    nuevo (Bcc, Cc, etc.) y el envio no lanza.
+    """
+    client, _, fake_smtp = _make_client()
+    client.send(
+        to="cliente@example.com\r\nBcc: atacante@evil.com",
+        subject="x",
+        body="b",
+    )
+    sent = fake_smtp.sent[0]
+    # Lo importante: NO hay Bcc inyectado como header separado.
+    assert sent["Bcc"] is None
+    # El To no contiene CR/LF embebido (sea cual sea la normalizacion
+    # exacta que aplique la policy).
+    assert "\r" not in str(sent["To"])
+    assert "\n" not in str(sent["To"])
